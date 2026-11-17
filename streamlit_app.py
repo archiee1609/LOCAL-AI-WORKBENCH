@@ -17,6 +17,8 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional
 
 import streamlit as st
+from PIL import Image, ImageFile
+ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 # Ensure backend modules are discoverable
 ROOT_DIR = Path(__file__).resolve().parent
@@ -1987,9 +1989,12 @@ def render_image_generation_section():
                 fpath = settings.generated_images_dir / fname
                 if fpath.exists():
                     with g_cols[i % 3]:
-                        st.image(str(fpath), caption=row.get("prompt", "")[:40] + "...", use_container_width=True)
-                        with open(fpath, "rb") as f:
-                            st.download_button("💾 Save", data=f.read(), file_name=fname, mime="image/png", key=f"dl_sett_hist_{row.get('id')}", use_container_width=True)
+                        try:
+                            st.image(str(fpath), caption=row.get("prompt", "")[:40] + "...", use_container_width=True)
+                            with open(fpath, "rb") as f:
+                                st.download_button("💾 Save", data=f.read(), file_name=fname, mime="image/png", key=f"dl_sett_hist_{row.get('id')}", use_container_width=True)
+                        except Exception as img_err:
+                            st.caption(f"⚠️ Image preview unavailable ({fname})")
 
 
 
@@ -3093,7 +3098,10 @@ elif selected_page == "🎨 ComfyUI Image Lab":
             local_p = settings.generated_images_dir / fn if fn else None
             with g_cols[i % 4]:
                 if local_p and local_p.exists():
-                    st.image(str(local_p), caption=row["prompt"][:40] + "...", use_container_width=True)
+                    try:
+                        st.image(str(local_p), caption=row["prompt"][:40] + "...", use_container_width=True)
+                    except Exception as img_err:
+                        st.caption(f"⚠️ Image preview unavailable ({fn})")
     else:
         st.info("No generated images saved yet. Click 'Generate Image' to render your first artwork!")
 

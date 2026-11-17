@@ -27831,3 +27831,23 @@ time=2026-10-23T09:26:56.021+05:30 level=INFO source=download.go:182 msg="downlo
 [GIN] 2026/10/23 - 09:27:03 | 200 |       0s |       127.0.0.1 | GET      "/api/experimental/model-recommendations"
 [GIN] 2026/10/23 - 09:27:03 | 200 |     96ms |       127.0.0.1 | GET      "/api/tags"
 [GIN] 2026/10/23 - 09:27:04 | 200 | 942.68ms |       127.0.0.1 | POST     "/api/me"
+
+--- Ollama session started at 2026-11-17T23:11:05.357163 with /usr/local/bin/ollama serve ---
+Couldn't find '/home/archie/.ollama/id_ed25519'. Generating new private key.
+Error: could not create directory mkdir /home/archie/.ollama: read-only file system
+
+--- Ollama session started at 2026-11-17T23:11:12.153584 with /usr/local/bin/ollama serve ---
+Couldn't find '/home/archie/.ollama/id_ed25519'. Generating new private key.
+Error: could not create directory mkdir /home/archie/.ollama: read-only file system
+
+--- Ollama session started at 2026-11-17T23:11:29.554730 with /usr/local/bin/ollama serve ---
+Couldn't find '/home/archie/.ollama/id_ed25519'. Generating new private key.
+Error: could not create directory mkdir /home/archie/.ollama: read-only file system
+
+--- Ollama session started at 2026-11-17T23:11:39.834484 with /usr/local/bin/ollama serve ---
+Couldn't find '/home/archie/.ollama/id_ed25519'. Generating new private key.
+Error: could not create directory mkdir /home/archie/.ollama: read-only file system
+
+--- Ollama session started at 2026-11-17T23:11:51.444591 with /usr/local/bin/ollama serve ---
+Couldn't find '/home/archie/.ollama/id_ed25519'. Generating new private key.
+Error: could not create directory mkdir /home/archie/.ollama: read-only file system

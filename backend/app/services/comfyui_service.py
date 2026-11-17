@@ -12,6 +12,21 @@ import signal
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
 import httpx
+from PIL import Image, ImageFile
+ImageFile.LOAD_TRUNCATED_IMAGES = True
+
+def is_image_fully_written(path: Path) -> bool:
+    """Validates that an image file is completely flushed and valid before reading/copying."""
+    if not path.exists() or path.stat().st_size < 1024:
+        return False
+    try:
+        with Image.open(path) as im:
+            im.verify()
+        with Image.open(path) as im:
+            im.load()
+        return True
+    except Exception:
+        return False
 
 from app.core.config import settings
 from app.core.logging import logger
@@ -803,7 +818,7 @@ class ComfyUIService:
 
                                 # 1. Try instantaneous direct filesystem copy from ComfyUI output directory
                                 direct_path = (self.comfy_output_dir / subfolder / src_filename).resolve()
-                                if direct_path.exists() and direct_path.stat().st_size > 1024:
+                                if is_image_fully_written(direct_path):
                                     shutil.copy2(direct_path, dest_path)
                                     output_image_filename = local_filename
                                     break
@@ -814,10 +829,11 @@ class ComfyUIService:
                                     params={"filename": src_filename, "subfolder": subfolder, "type": img_type},
                                     timeout=30.0
                                 )
-                                if view_res.status_code == 200 and len(view_res.content) > 0:
+                                if view_res.status_code == 200 and len(view_res.content) > 1024:
                                     dest_path.write_bytes(view_res.content)
-                                    output_image_filename = local_filename
-                                    break
+                                    if is_image_fully_written(dest_path):
+                                        output_image_filename = local_filename
+                                        break
                 except Exception as ex:
                     logger.debug(f"History poll exception at tick {poll_idx}: {ex}")
 
@@ -834,7 +850,7 @@ class ComfyUIService:
                         )
                         if recent_pngs:
                             latest_png = recent_pngs[0]
-                            if latest_png.stat().st_size > 10000:
+                            if is_image_fully_written(latest_png):
                                 local_filename = f"gen_{job_id[:8]}_{latest_png.name}"
                                 dest_path = settings.generated_images_dir / local_filename
                                 shutil.copy2(latest_png, dest_path)
