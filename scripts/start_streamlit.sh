@@ -15,9 +15,11 @@ echo "========================================================"
 echo ""
 
 # Activate virtualenv if present
+PYTHON_BIN="python3"
 if [ -f "${ROOT_DIR}/.venv/bin/activate" ]; then
     # shellcheck disable=SC1091
     source "${ROOT_DIR}/.venv/bin/activate"
+    PYTHON_BIN="${ROOT_DIR}/.venv/bin/python"
 fi
 
 # Set safe environment variables
@@ -73,6 +75,18 @@ fi
 
 # 3. Launch Streamlit Application
 URL="http://127.0.0.1:8501"
+
+if curl -s -m 1 http://127.0.0.1:8501/_stcore/health >/dev/null 2>&1 || curl -s -m 1 http://127.0.0.1:8501 >/dev/null 2>&1; then
+    echo "[+] Local AI Workbench is already running at ${URL}!"
+    echo "[*] Opening in browser..."
+    if command -v open >/dev/null 2>&1; then
+        open "${URL}"
+    elif command -v xdg-open >/dev/null 2>&1; then
+        xdg-open "${URL}"
+    fi
+    exit 0
+fi
+
 echo ""
 echo "[*] Starting Local AI Workbench via Streamlit at ${URL}..."
 echo "[*] Press Ctrl+C to stop the application."
@@ -84,4 +98,4 @@ elif command -v xdg-open >/dev/null 2>&1; then
     (sleep 2 && xdg-open "${URL}") &
 fi
 
-python -m streamlit run "${ROOT_DIR}/streamlit_app.py" --server.port 8501 --server.headless true
+"${PYTHON_BIN}" -m streamlit run "${ROOT_DIR}/streamlit_app.py" --server.port 8501 --server.headless true

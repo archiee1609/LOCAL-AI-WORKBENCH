@@ -15,9 +15,11 @@ echo "========================================================"
 echo ""
 
 # Activate virtualenv if present
+PYTHON_BIN="python3"
 if [ -f "${ROOT_DIR}/.venv/bin/activate" ]; then
     # shellcheck disable=SC1091
     source "${ROOT_DIR}/.venv/bin/activate"
+    PYTHON_BIN="${ROOT_DIR}/.venv/bin/python"
 fi
 
 # Set safe environment variables
@@ -90,4 +92,4 @@ elif command -v xdg-open >/dev/null 2>&1; then
     (sleep 2 && xdg-open "${URL}") &
 fi
 
-python "${ROOT_DIR}/backend/run.py"
+"${PYTHON_BIN}" "${ROOT_DIR}/backend/run.py"

@@ -824,7 +824,7 @@ ollama_online, ollama_health, models_list, comfy_online = get_cached_engine_stat
 model_names = [m.name for m in models_list] if models_list else ["gemma4:12b"]
 
 # User Preferences Persistence
-DEFAULT_SYSTEM_INSTRUCTION = "You are Local AI Workbench, an all-in-one expert assistant for coding, reasoning, reports, and data analysis."
+DEFAULT_SYSTEM_INSTRUCTION = settings.default_system_instruction
 
 def get_preference(key: str, default: str = "") -> str:
     try:
@@ -1746,6 +1746,16 @@ def render_diagnostics_section():
         if local_checkpoints:
             for ck in local_checkpoints:
                 st.code(f"models/checkpoints/{ck}")
+        else:
+            st.caption("No models found in `ComfyUI/models/checkpoints/`.")
+            if st.button("📥 Download DreamShaper 8 (2.1GB)", key="diag_dl_dreamshaper", help="Download DreamShaper 8 (Photorealistic SD 1.5)"):
+                asyncio.create_task(comfyui_service.download_model_background("dreamshaper"))
+                st.rerun()
+            dl_st = comfyui_service.download_state
+            if dl_st and dl_st.get("status") == "downloading":
+                st.progress(dl_st.get("percent", 0) / 100.0, text=f"📥 {dl_st.get('message', 'Downloading...')}")
+            elif dl_st and dl_st.get("status") == "completed":
+                st.success(f"✅ {dl_st.get('message', 'Model installed!')}")
 
     st.markdown("---")
     # Voice & Speech Engine Diagnostic Status
@@ -2365,40 +2375,63 @@ if selected_page == "💬 All-in-One Studio":
                 )
 
                 checkpoints = comfyui_service.get_local_checkpoints()
-                selected_ckpt = checkpoints[0] if checkpoints else "v1-5-pruned-emaonly.safetensors"
-                det_w, det_h = parse_resolution_from_prompt(image_query)
-
-                status_box.markdown(
-                    render_thinking_badge("processing", f"Sampling diffusion tensors on CPU ({det_w}×{det_h}, ~60-120s)..."),
-                    unsafe_allow_html=True
-                )
-
-                req = ImageGenerateRequest(
-                    prompt=image_query,
-                    checkpoint=selected_ckpt,
-                    width=det_w,
-                    height=det_h,
-                    steps=15,
-                    cfg_scale=7.0,
-                    sampler_name="dpmpp_2m",
-                    scheduler="karras",
-                    enhance_prompt=True
-                )
-                res = run_async(comfyui_service.generate_image(req))
-                status_box.empty()
-
-                if res.status == "success" or res.status == "completed":
-                    img_path = settings.generated_images_dir / res.image_filename if res.image_filename else None
-                    if img_path and img_path.exists():
-                        st.image(str(img_path), caption=f"{image_query} (Seed: {res.seed})", use_container_width=True)
-                        response_text = f"### 🎨 Generated Image\n\n**Prompt:** *{image_query}*\n**Seed:** `{res.seed}` • **Saved:** `{res.image_filename}`"
+                if not checkpoints:
+                    status_box.empty()
+                    tmp_files = list(comfyui_service.checkpoints_dir.glob("*.tmp"))
+                    if tmp_files:
+                        tmp_size_mb = round(tmp_files[0].stat().st_size / (1024 * 1024), 1)
+                        response_text = (
+                            f"### ⏳ Diffusion Checkpoint Downloading\n\n"
+                            f"ComfyUI engine is online, but **no `.safetensors` checkpoint is ready yet**.\n\n"
+                            f"**DreamShaper 8** is currently downloading in the background: "
+                            f"**{tmp_size_mb} MB / ~2,100 MB**.\n\n"
+                            f"- Please wait a couple minutes for the download to finish.\n"
+                            f"- As soon as it completes, your `/image {image_query}` will render immediately!"
+                        )
                     else:
-                        response_text = f"Image generated: `{res.image_url}`"
+                        response_text = (
+                            f"### ⚠️ No Image Checkpoint Installed\n\n"
+                            f"ComfyUI is online, but requires a diffusion model (`.safetensors`) in `ComfyUI/models/checkpoints/` to generate images.\n\n"
+                            f"👉 Go to **More → Engines & Diagnostics** to download DreamShaper 8 (2.1GB) with 1 click."
+                        )
+                    st.warning(response_text)
+                    save_chat_message(st.session_state["active_conv_id"], "assistant", response_text)
+                    st.session_state.messages.append({"role": "assistant", "content": response_text})
                 else:
-                    response_text = f"⚠️ Image generation error: {res.error or 'ComfyUI offline'}"
-                
-                save_chat_message(st.session_state["active_conv_id"], "assistant", response_text)
-                st.session_state.messages.append({"role": "assistant", "content": response_text})
+                    selected_ckpt = checkpoints[0]
+                    det_w, det_h = parse_resolution_from_prompt(image_query)
+
+                    status_box.markdown(
+                        render_thinking_badge("processing", f"Sampling diffusion tensors on CPU ({det_w}×{det_h}, ~60-120s)..."),
+                        unsafe_allow_html=True
+                    )
+
+                    req = ImageGenerateRequest(
+                        prompt=image_query,
+                        checkpoint=selected_ckpt,
+                        width=det_w,
+                        height=det_h,
+                        steps=15,
+                        cfg_scale=7.0,
+                        sampler_name="dpmpp_2m",
+                        scheduler="karras",
+                        enhance_prompt=True
+                    )
+                    res = run_async(comfyui_service.generate_image(req))
+                    status_box.empty()
+
+                    if res.status == "success" or res.status == "completed":
+                        img_path = settings.generated_images_dir / res.image_filename if res.image_filename else None
+                        if img_path and img_path.exists():
+                            st.image(str(img_path), caption=f"{image_query} (Seed: {res.seed})", use_container_width=True)
+                            response_text = f"### 🎨 Generated Image\n\n**Prompt:** *{image_query}*\n**Seed:** `{res.seed}` • **Saved:** `{res.image_filename}`"
+                        else:
+                            response_text = f"Image generated: `{res.image_url}`"
+                    else:
+                        response_text = f"⚠️ Image generation error: {res.error or 'ComfyUI offline'}"
+                    
+                    save_chat_message(st.session_state["active_conv_id"], "assistant", response_text)
+                    st.session_state.messages.append({"role": "assistant", "content": response_text})
 
             # Check for report generation command or natural language report/PDF request
             is_rep, report_title, rep_scope, rep_attached_ctx = detect_report_request(

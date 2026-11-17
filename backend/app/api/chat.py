@@ -224,6 +224,12 @@ async def chat_completions(req: ChatCompletionRequest):
         memory_prompt_sections.append("### Active Long-Term Memories & AI Tool Guidelines:\n" + "\n".join(mem_items))
 
     base_system = (conv["system_prompt"] or "").strip()
+    if not base_system:
+        sys_pref = await db.fetchone("SELECT value FROM user_preferences WHERE key = 'system_instruction'")
+        if sys_pref and sys_pref["value"]:
+            base_system = sys_pref["value"].strip()
+        else:
+            base_system = settings.default_system_instruction.strip()
     if memory_prompt_sections:
         mem_block = "\n\n".join(memory_prompt_sections)
         if base_system:

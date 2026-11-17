@@ -21,7 +21,7 @@ async def get_settings():
     theme_row = await db.fetchone("SELECT value FROM user_preferences WHERE key = 'theme'")
     theme = theme_row["value"] if theme_row else "dark"
     sys_inst_row = await db.fetchone("SELECT value FROM user_preferences WHERE key = 'system_instruction'")
-    sys_inst = sys_inst_row["value"] if sys_inst_row else "You are Local AI Workbench, an all-in-one expert assistant for coding, reasoning, reports, and data analysis."
+    sys_inst = sys_inst_row["value"] if sys_inst_row else settings.default_system_instruction
     
     return SystemSettings(
         ollama_base_url=settings.ollama_base_url,
