@@ -18,6 +18,10 @@ async def lifespan(app: FastAPI):
     logger.info(f"Starting {settings.app_name} v{settings.app_version} on {settings.host}:{settings.port}")
     await run_migrations()
     
+    # Initialize Account Management & Workspaces (Rule 2 & 5)
+    from app.services.account_service import account_service
+    account_service.ensure_initial_workspaces()
+    
     # Check Ollama and auto-start if needed
     if not await ollama_service.is_server_reachable():
         logger.info("Ollama is not running. Auto-starting local Ollama engine...")
@@ -49,7 +53,6 @@ async def lifespan(app: FastAPI):
     except Exception:
         pass
     try:
-        from app.services.ollama_service import ollama_service
         await ollama_service.stop_service()
     except Exception:
         pass

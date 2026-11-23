@@ -22,16 +22,29 @@ from app.schemas.chat import (
 router = APIRouter(prefix="/chat", tags=["Chat & Conversations"])
 
 @router.get("/conversations", response_model=List[ConversationResponse])
-async def list_conversations():
-    rows = await db.fetchall(
-        """
-        SELECT c.*, COUNT(m.id) AS message_count
-        FROM conversations c
-        LEFT JOIN messages m ON c.id = m.conversation_id
-        GROUP BY c.id
-        ORDER BY c.updated_at DESC
-        """
-    )
+async def list_conversations(user_id: Optional[str] = Query(None)):
+    if user_id:
+        rows = await db.fetchall(
+            """
+            SELECT c.*, COUNT(m.id) AS message_count
+            FROM conversations c
+            LEFT JOIN messages m ON c.id = m.conversation_id
+            WHERE c.user_id = ?
+            GROUP BY c.id
+            ORDER BY c.updated_at DESC
+            """,
+            (user_id,)
+        )
+    else:
+        rows = await db.fetchall(
+            """
+            SELECT c.*, COUNT(m.id) AS message_count
+            FROM conversations c
+            LEFT JOIN messages m ON c.id = m.conversation_id
+            GROUP BY c.id
+            ORDER BY c.updated_at DESC
+            """
+        )
     return [
         ConversationResponse(
             id=r["id"],
@@ -42,19 +55,21 @@ async def list_conversations():
             context_length=r["context_length"] or 8192,
             created_at=r["created_at"],
             updated_at=r["updated_at"],
-            message_count=r["message_count"]
+            message_count=r["message_count"],
+            user_id=r["user_id"] if "user_id" in r.keys() else ""
         )
         for r in rows
     ]
 
 @router.post("/conversations", response_model=ConversationResponse)
-async def create_conversation(req: ConversationCreate):
+async def create_conversation(req: ConversationCreate, user_id: Optional[str] = Query(None)):
     conv_id = str(uuid.uuid4())
     now = datetime.datetime.now().isoformat()
+    target_user = req.user_id or user_id or ""
     await db.execute(
         """
-        INSERT INTO conversations (id, title, model, system_prompt, temperature, context_length, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO conversations (id, title, model, system_prompt, temperature, context_length, created_at, updated_at, user_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             conv_id,
@@ -64,7 +79,8 @@ async def create_conversation(req: ConversationCreate):
             req.temperature if req.temperature is not None else 0.7,
             req.context_length if req.context_length is not None else 8192,
             now,
-            now
+            now,
+            target_user
         )
     )
     return ConversationResponse(
@@ -76,7 +92,8 @@ async def create_conversation(req: ConversationCreate):
         context_length=req.context_length or 8192,
         created_at=now,
         updated_at=now,
-        message_count=0
+        message_count=0,
+        user_id=target_user
     )
 
 @router.get("/conversations/search")
@@ -95,10 +112,13 @@ async def search_conversations(q: str = Query(..., min_length=1)):
     return rows
 
 @router.get("/conversations/{conversation_id}")
-async def get_conversation(conversation_id: str):
-    conv = await db.fetchone("SELECT * FROM conversations WHERE id = ?", (conversation_id,))
+async def get_conversation(conversation_id: str, user_id: Optional[str] = Query(None)):
+    if user_id:
+        conv = await db.fetchone("SELECT * FROM conversations WHERE id = ? AND (user_id = ? OR user_id = '')", (conversation_id, user_id))
+    else:
+        conv = await db.fetchone("SELECT * FROM conversations WHERE id = ?", (conversation_id,))
     if not conv:
-        raise HTTPException(status_code=404, detail="Conversation not found.")
+        raise HTTPException(status_code=404, detail="Conversation not found or access restricted.")
     
     msgs = await db.fetchall(
         "SELECT * FROM messages WHERE conversation_id = ? ORDER BY created_at ASC",
@@ -154,14 +174,19 @@ async def update_conversation(conversation_id: str, req: ConversationUpdate):
         context_length=new_ctx,
         created_at=conv["created_at"],
         updated_at=now,
-        message_count=0
+        message_count=0,
+        user_id=conv["user_id"] if "user_id" in conv.keys() else ""
     )
 
 @router.delete("/conversations/{conversation_id}")
-async def delete_conversation(conversation_id: str):
-    conv = await db.fetchone("SELECT * FROM conversations WHERE id = ?", (conversation_id,))
+async def delete_conversation(conversation_id: str, user_id: Optional[str] = Query(None)):
+    if user_id:
+        conv = await db.fetchone("SELECT * FROM conversations WHERE id = ? AND user_id = ?", (conversation_id, user_id))
+    else:
+        conv = await db.fetchone("SELECT * FROM conversations WHERE id = ?", (conversation_id,))
     if not conv:
-        raise HTTPException(status_code=404, detail="Conversation not found.")
+        raise HTTPException(status_code=404, detail="Conversation not found or access restricted.")
+    await db.execute("DELETE FROM messages WHERE conversation_id = ?", (conversation_id,))
     await db.execute("DELETE FROM conversations WHERE id = ?", (conversation_id,))
     return {"deleted": True, "id": conversation_id}
 

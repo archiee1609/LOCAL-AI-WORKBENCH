@@ -312,3 +312,20 @@ export interface ModelRecommendationsResponse {
   recommendations: ModelRecommendation[];
   installed_tags: string[];
 }
+
+export interface UserProfile {
+  name: string;
+  username: string;
+  role: 'User' | 'Admin' | string;
+  workspace_path: string;
+}
+
+export interface LoadBalancerStats {
+  active_requests: number;
+  queued_requests: number;
+  max_concurrency: number;
+  hardware_profile: string;
+  active_sessions: number;
+  total_completed_requests: number;
+  user_request_counts: Record<string, number>;
+}

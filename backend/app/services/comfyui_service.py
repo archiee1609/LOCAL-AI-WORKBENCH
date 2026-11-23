@@ -283,6 +283,9 @@ class ComfyUIService:
         self.checkpoints_dir.mkdir(parents=True, exist_ok=True)
         self.comfy_output_dir = self.comfy_dir / "output"
         self.comfy_output_dir.mkdir(parents=True, exist_ok=True)
+        (self.comfy_dir / "custom_nodes").mkdir(parents=True, exist_ok=True)
+        (self.comfy_dir / "temp").mkdir(parents=True, exist_ok=True)
+        (self.comfy_dir / "user").mkdir(parents=True, exist_ok=True)
         self._process: Optional[subprocess.Popen] = None
         self.download_state: Optional[Dict[str, Any]] = None
 
@@ -331,13 +334,20 @@ class ComfyUIService:
     def find_python_executable(self) -> str:
         """
         Locates the appropriate Python interpreter for running ComfyUI across Windows, macOS, and Linux.
-        Checks dedicated ComfyUI venvs, project virtualenv, and falls back to sys.executable.
+        Checks if sys.executable already has torch, then checks dedicated ComfyUI venvs, project virtualenv,
+        and falls back to sys.executable.
         """
+        try:
+            import torch  # noqa: F401
+            return sys.executable
+        except ImportError:
+            pass
+
         is_win = sys.platform == "win32"
         venv_candidates = [
             self.comfy_dir / "venv" / ("Scripts/python.exe" if is_win else "bin/python"),
-            settings.base_dir / ".venv" / ("Scripts/python.exe" if is_win else "bin/python"),
             self.comfy_dir / ".venv" / ("Scripts/python.exe" if is_win else "bin/python"),
+            settings.base_dir / ".venv" / ("Scripts/python.exe" if is_win else "bin/python"),
         ]
         for candidate in venv_candidates:
             if candidate.is_file():
@@ -389,7 +399,7 @@ class ComfyUIService:
 
             # Cross-platform detachment
             if sys.platform == "win32":
-                popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP | 0x08000000
+                popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP | getattr(subprocess, "DETACHED_PROCESS", 0x00000008)
             else:
                 popen_kwargs["start_new_session"] = True
 

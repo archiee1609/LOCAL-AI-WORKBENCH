@@ -33,7 +33,7 @@ try:
 except Exception:
     is_in_streamlit_runtime = False
 
-if not is_in_streamlit_runtime:
+if not is_in_streamlit_runtime and __name__ == "__main__":
     import subprocess
     from app.services.ollama_service import ollama_service
     from app.services.comfyui_service import comfyui_service
@@ -80,7 +80,8 @@ from app.services.coding_agent_service import coding_agent_service
 from app.services.document_service import process_uploaded_files, extract_file_data
 from app.services.model_download_service import model_download_manager, parse_model_names
 from app.services.model_recommendation_service import model_recommendation_service
-from app.services.voice_service import voice_service
+from app.services.account_service import account_service
+from app.core.load_balancer import load_balancer
 from app.schemas.image import ImageGenerateRequest
 
 @st.cache_data(ttl=30)
@@ -111,11 +112,21 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Custom Styling (Professional, Clean Enterprise Light Theme)
+# Custom Styling (Ultra-Modern, Aesthetic Enterprise Theme)
 st.markdown("""
 <style>
     /* Google Plus Jakarta Sans & JetBrains Mono Fonts */
-    @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+
+    :root {
+        --primary-gradient: linear-gradient(135deg, #4f46e5 0%, #6366f1 50%, #818cf8 100%);
+        --primary-glow: rgba(99, 102, 241, 0.25);
+        --surface-card: #ffffff;
+        --border-subtle: #e2e8f0;
+        --border-focus: #6366f1;
+        --text-headline: #0f172a;
+        --text-muted: #64748b;
+    }
 
     * {
         font-family: 'Plus Jakarta Sans', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -127,9 +138,13 @@ st.markdown("""
         font-family: 'JetBrains Mono', monospace !important;
     }
 
-    /* Overall App Background & Padding */
+    /* Overall App Background & Ambient Mesh Gradient */
     .stApp {
         background-color: #f8fafc;
+        background-image: 
+            radial-gradient(ellipse 80% 50% at 50% -10%, rgba(99, 102, 241, 0.07), transparent 70%),
+            radial-gradient(circle at 100% 0%, rgba(16, 185, 129, 0.04), transparent 40%);
+        background-attachment: fixed;
     }
 
     .main .block-container {
@@ -138,14 +153,17 @@ st.markdown("""
         max-width: 1280px;
     }
 
-    /* Sidebar Styling */
+    /* Sidebar Styling - Premium SaaS Glass Effect */
     [data-testid="stSidebar"] {
         background-color: #ffffff;
         border-right: 1px solid #e2e8f0;
+        box-shadow: 2px 0 12px rgba(0, 0, 0, 0.02);
     }
 
     [data-testid="stSidebar"] > div:first-child {
         padding-top: 1.25rem;
+        padding-left: 1rem;
+        padding-right: 1rem;
     }
 
     [data-testid="stSidebar"] hr {
@@ -157,17 +175,18 @@ st.markdown("""
     [data-testid="stSidebar"] div[data-testid="stRadio"] > div[role="radiogroup"] {
         background: #f1f5f9;
         padding: 0.35rem;
-        border-radius: 0.75rem;
-        gap: 0.25rem;
+        border-radius: 0.85rem;
+        gap: 0.3rem;
+        border: 1px solid #e2e8f0;
     }
 
     [data-testid="stSidebar"] div[data-testid="stRadio"] label {
-        border-radius: 0.55rem;
-        padding: 0.5rem 0.85rem !important;
+        border-radius: 0.65rem;
+        padding: 0.55rem 0.95rem !important;
         font-weight: 600;
         font-size: 0.88rem;
         color: #475569;
-        transition: all 0.15s ease-in-out;
+        transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
         cursor: pointer;
         border: 1px solid transparent;
         background: transparent;
@@ -176,12 +195,15 @@ st.markdown("""
     [data-testid="stSidebar"] div[data-testid="stRadio"] label:hover {
         color: #0f172a;
         background-color: #ffffff;
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.03);
     }
 
     [data-testid="stSidebar"] div[data-testid="stRadio"] label[data-checked="true"],
     [data-testid="stSidebar"] div[data-testid="stRadio"] input:checked + div {
         color: #4f46e5 !important;
         font-weight: 700;
+        background-color: #ffffff !important;
+        box-shadow: 0 2px 8px rgba(79, 70, 229, 0.12) !important;
     }
 
     /* Sleek Custom Scrollbars */
@@ -200,36 +222,40 @@ st.markdown("""
         background: #94a3b8;
     }
 
-    /* Top Brand Bar */
+    /* Top Brand Bar - Glassmorphic Aesthetic Header */
     .brand-container {
         display: flex;
         align-items: center;
         justify-content: space-between;
-        padding: 0.85rem 1.35rem;
-        background: #ffffff;
-        border: 1px solid #e2e8f0;
-        border-radius: 1rem;
+        padding: 0.9rem 1.4rem;
+        background: rgba(255, 255, 255, 0.85);
+        backdrop-filter: blur(16px);
+        -webkit-backdrop-filter: blur(16px);
+        border: 1px solid rgba(226, 232, 240, 0.9);
+        border-radius: 1.15rem;
         margin-bottom: 1.25rem;
-        box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.03);
+        box-shadow: 0 4px 20px -4px rgba(15, 23, 42, 0.05), 0 2px 6px -2px rgba(15, 23, 42, 0.03);
     }
     .brand-title {
-        font-size: 1.15rem;
+        font-size: 1.18rem;
         font-weight: 800;
         color: #0f172a;
-        letter-spacing: -0.02em;
+        letter-spacing: -0.025em;
         display: flex;
         align-items: center;
-        gap: 0.6rem;
+        gap: 0.65rem;
     }
     .brand-pill {
         display: inline-flex;
         align-items: center;
         gap: 0.35rem;
-        padding: 0.25rem 0.75rem;
+        padding: 0.28rem 0.8rem;
         font-size: 0.74rem;
         font-weight: 700;
         border-radius: 9999px;
         line-height: 1.2;
+        letter-spacing: 0.01em;
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
     }
     .pill-success {
         background-color: #ecfdf5;
@@ -252,100 +278,116 @@ st.markdown("""
         border: 1px solid #e2e8f0;
     }
 
-    /* Cards */
+    /* Cards & Containers */
     .stCard, .workbench-card {
         background-color: #ffffff;
         border: 1px solid #e2e8f0;
-        border-radius: 0.875rem;
-        padding: 1.25rem;
-        box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.03);
+        border-radius: 1rem;
+        padding: 1.35rem;
+        box-shadow: 0 4px 16px -2px rgba(15, 23, 42, 0.04), 0 1px 3px rgba(15, 23, 42, 0.02);
         margin-bottom: 1rem;
+        transition: border-color 0.2s ease, box-shadow 0.2s ease;
+    }
+    .workbench-card:hover {
+        border-color: #cbd5e1;
+        box-shadow: 0 8px 24px -4px rgba(15, 23, 42, 0.07);
     }
 
-    /* Buttons */
+    /* Primary & Secondary Action Buttons */
     button[kind="primary"] {
-        background: linear-gradient(135deg, #4f46e5 0%, #6366f1 100%) !important;
+        background: linear-gradient(135deg, #4f46e5 0%, #6366f1 50%, #7c3aed 100%) !important;
         border: none !important;
         color: #ffffff !important;
         font-weight: 600 !important;
-        border-radius: 0.65rem !important;
-        padding: 0.5rem 1.15rem !important;
-        box-shadow: 0 2px 4px rgba(79, 70, 229, 0.2) !important;
-        transition: all 0.18s ease-in-out !important;
+        border-radius: 0.75rem !important;
+        padding: 0.55rem 1.25rem !important;
+        box-shadow: 0 3px 10px rgba(79, 70, 229, 0.28) !important;
+        transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1) !important;
+        letter-spacing: -0.01em;
     }
     button[kind="primary"]:hover {
-        box-shadow: 0 4px 10px rgba(79, 70, 229, 0.32) !important;
-        transform: translateY(-1px);
+        box-shadow: 0 6px 18px rgba(79, 70, 229, 0.42) !important;
+        transform: translateY(-1.5px);
     }
     button[kind="primary"]:active {
         transform: translateY(0);
+        box-shadow: 0 2px 6px rgba(79, 70, 229, 0.2) !important;
     }
 
     button[kind="secondary"] {
-        border-radius: 0.6rem !important;
+        border-radius: 0.7rem !important;
         border: 1px solid #e2e8f0 !important;
         background-color: #ffffff !important;
         color: #334155 !important;
         font-weight: 500 !important;
-        transition: all 0.15s ease !important;
+        transition: all 0.18s ease !important;
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.02) !important;
     }
     button[kind="secondary"]:hover {
         border-color: #cbd5e1 !important;
         background-color: #f8fafc !important;
         color: #0f172a !important;
+        transform: translateY(-1px);
+        box-shadow: 0 3px 8px rgba(0, 0, 0, 0.04) !important;
     }
 
-    /* Starter Prompt Cards */
+    /* Starter Prompt Cards - Aesthetic Interactive Tiles */
     .starter-btn {
         text-align: left;
         width: 100%;
-        border-radius: 0.875rem !important;
+        border-radius: 1rem !important;
         border: 1px solid #e2e8f0 !important;
         background: #ffffff !important;
-        padding: 0.85rem 1.1rem !important;
-        transition: all 0.15s ease !important;
+        padding: 1rem 1.2rem !important;
+        transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1) !important;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.02) !important;
     }
     .starter-btn:hover {
-        border-color: #6366f1 !important;
-        box-shadow: 0 4px 12px rgba(99, 102, 241, 0.1) !important;
+        border-color: #818cf8 !important;
+        background: #fafbff !important;
+        box-shadow: 0 8px 24px -4px rgba(99, 102, 241, 0.12) !important;
+        transform: translateY(-2px);
     }
 
     /* Chat Messages styling */
     [data-testid="stChatMessage"] {
-        border-radius: 1rem;
-        padding: 1.1rem 1.35rem;
-        margin-bottom: 0.85rem;
+        border-radius: 1.15rem;
+        padding: 1.15rem 1.45rem;
+        margin-bottom: 0.95rem;
         border: 1px solid #e2e8f0;
-        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.02);
-        transition: all 0.15s ease;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.02);
+        transition: all 0.18s ease;
+        line-height: 1.6;
     }
     [data-testid="stChatMessage"]:hover {
         border-color: #cbd5e1;
-        box-shadow: 0 3px 8px rgba(0, 0, 0, 0.04);
+        box-shadow: 0 4px 14px rgba(0, 0, 0, 0.04);
     }
 
     /* Distinct styling for User vs Assistant bubbles */
     [data-testid="stChatMessage"]:has([data-testid="chatAvatarIcon-user"]) {
-        background-color: #f8fafc;
-        border-left: 3.5px solid #6366f1;
+        background-color: #f8faff;
+        border: 1px solid #e0e7ff;
+        border-left: 4px solid #6366f1;
     }
     [data-testid="stChatMessage"]:has([data-testid="chatAvatarIcon-assistant"]) {
         background-color: #ffffff;
-        border-left: 3.5px solid #10b981;
+        border: 1px solid #e2e8f0;
+        border-left: 4px solid #10b981;
     }
 
-    /* Chat Input Bar - Subtle Animated Border */
+    /* Chat Input Bar - Aesthetic Floating Input with Ambient Glow */
     [data-testid="stChatInput"] {
-        border-radius: 1.25rem !important;
+        border-radius: 1.5rem !important;
         border: 1.5px solid #cbd5e1 !important;
-        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.03) !important;
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.04) !important;
         background: #ffffff !important;
         animation: promptBorderGlow 4s ease-in-out infinite !important;
         transition: border-color 0.25s ease, box-shadow 0.25s ease;
     }
     [data-testid="stChatInput"]:hover {
         border-color: #a5b4fc !important;
-        box-shadow: 0 3px 12px rgba(99, 102, 241, 0.12) !important;
+        box-shadow: 0 6px 20px rgba(99, 102, 241, 0.14) !important;
     }
     [data-testid="stChatInput"]:focus-within {
         border-color: #6366f1 !important;
@@ -355,54 +397,80 @@ st.markdown("""
     @keyframes promptBorderGlow {
         0%, 100% {
             border-color: #cbd5e1;
-            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.03), 0 0 0 1px rgba(99, 102, 241, 0.08);
+            box-shadow: 0 3px 10px rgba(0, 0, 0, 0.03), 0 0 0 1px rgba(99, 102, 241, 0.06);
         }
         50% {
             border-color: #818cf8;
-            box-shadow: 0 4px 14px rgba(99, 102, 241, 0.14), 0 0 8px rgba(99, 102, 241, 0.22);
+            box-shadow: 0 5px 16px rgba(99, 102, 241, 0.14), 0 0 10px rgba(99, 102, 241, 0.20);
         }
     }
 
     @keyframes promptBorderActive {
         0%, 100% {
             border-color: #6366f1;
-            box-shadow: 0 0 0 3.5px rgba(99, 102, 241, 0.22), 0 4px 16px rgba(99, 102, 241, 0.15);
+            box-shadow: 0 0 0 3.5px rgba(99, 102, 241, 0.22), 0 6px 20px rgba(99, 102, 241, 0.15);
         }
         50% {
             border-color: #06b6d4;
-            box-shadow: 0 0 0 3.5px rgba(6, 182, 212, 0.26), 0 4px 18px rgba(6, 182, 212, 0.20);
+            box-shadow: 0 0 0 3.5px rgba(6, 182, 212, 0.26), 0 6px 22px rgba(6, 182, 212, 0.20);
         }
+    }
+
+    /* Command Chips Styling */
+    .command-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.35rem;
+        padding: 0.32rem 0.85rem;
+        border-radius: 9999px;
+        font-size: 0.78rem;
+        font-weight: 600;
+        background: #ffffff;
+        border: 1px solid #e2e8f0;
+        color: #475569;
+        transition: all 0.15s ease;
+        cursor: pointer;
+    }
+    .command-chip:hover {
+        border-color: #6366f1;
+        color: #4f46e5;
+        background: #f8faff;
+        transform: translateY(-1px);
+        box-shadow: 0 2px 6px rgba(99, 102, 241, 0.12);
     }
 
     /* Tabs Styling */
     .stTabs [data-baseweb="tab-list"] {
         gap: 1.25rem;
         border-bottom: 1.5px solid #e2e8f0;
-        padding-bottom: 0.25rem;
+        padding-bottom: 0.35rem;
     }
     .stTabs [data-baseweb="tab"] {
         font-weight: 600;
         font-size: 0.92rem;
         color: #64748b;
-        padding: 0.6rem 0.5rem;
+        padding: 0.6rem 0.65rem;
         border: none !important;
         background: transparent !important;
         transition: color 0.15s ease;
+        border-radius: 0.5rem;
     }
     .stTabs [data-baseweb="tab"]:hover {
         color: #0f172a;
+        background: #f1f5f9 !important;
     }
     .stTabs [aria-selected="true"] {
         color: #4f46e5 !important;
         border-bottom: 2.5px solid #4f46e5 !important;
+        background: transparent !important;
     }
 
-    /* Thinking & Analysing Subtle Animation */
+    /* Thinking & Analysing Animation */
     .ai-thinking-box {
         display: inline-flex;
         align-items: center;
         gap: 0.65rem;
-        padding: 0.4rem 0.95rem;
+        padding: 0.45rem 1.05rem;
         border-radius: 9999px;
         background: #f8fafc;
         border: 1px solid #e2e8f0;
@@ -851,41 +919,69 @@ def set_preference(key: str, value: str) -> None:
 # ---------------------------------------------------------
 # CONVERSATION & CHAT HISTORY HELPERS (ChatGPT & Gemini Style)
 # ---------------------------------------------------------
-def get_conversations(limit: int = 50) -> List[Dict[str, Any]]:
+def get_conversations(limit: int = 50, user_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    """
+    Fetches conversations strictly isolated to the specified user (Rule 2 & Rule 3).
+    Ensures zero cross-user chat leakage.
+    """
+    if not user_id:
+        return []
     try:
         rows = run_async(db.fetchall(
             """
             SELECT c.*, COUNT(m.id) AS msg_count
             FROM conversations c
             LEFT JOIN messages m ON c.id = m.conversation_id
+            WHERE c.user_id = ?
             GROUP BY c.id
             ORDER BY c.updated_at DESC
             LIMIT ?
             """,
-            (limit,)
+            (user_id, limit)
         ))
         return [dict(r) for r in rows]
     except Exception:
         return []
 
-def create_new_conversation(title: str = "New Chat", model: str = "") -> str:
+def create_new_conversation(title: str = "New Chat", model: str = "", user_id: Optional[str] = None) -> str:
     conv_id = str(uuid.uuid4())
     now = datetime.datetime.now().isoformat()
     m_name = model or "gemma4:12b"
+    u_id = user_id or ""
     try:
         run_async(db.execute(
             """
-            INSERT INTO conversations (id, title, model, system_prompt, temperature, context_length, created_at, updated_at)
-            VALUES (?, ?, ?, '', 0.7, 8192, ?, ?)
+            INSERT INTO conversations (id, title, model, system_prompt, temperature, context_length, created_at, updated_at, user_id)
+            VALUES (?, ?, ?, '', 0.7, 8192, ?, ?, ?)
             """,
-            (conv_id, title, m_name, now, now)
+            (conv_id, title, m_name, now, now, u_id)
         ))
     except Exception:
-        pass
+        try:
+            run_async(db.execute(
+                """
+                INSERT INTO conversations (id, title, model, system_prompt, temperature, context_length, created_at, updated_at)
+                VALUES (?, ?, ?, '', 0.7, 8192, ?, ?)
+                """,
+                (conv_id, title, m_name, now, now)
+            ))
+        except Exception:
+            pass
     return conv_id
 
-def load_conversation_messages(conv_id: str) -> List[Dict[str, Any]]:
+def load_conversation_messages(conv_id: str, user_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    """
+    Loads conversation messages with strict ownership check.
+    If user_id is provided, verifies that the conversation belongs to the user.
+    """
     try:
+        if user_id:
+            check_owner = run_async(db.fetchone(
+                "SELECT id FROM conversations WHERE id = ? AND user_id = ?",
+                (conv_id, user_id)
+            ))
+            if not check_owner:
+                return []
         rows = run_async(db.fetchall(
             "SELECT * FROM messages WHERE conversation_id = ? ORDER BY created_at ASC",
             (conv_id,)
@@ -928,10 +1024,21 @@ def save_chat_message(conv_id: str, role: str, content: str, images: Optional[Li
         pass
     return msg_id
 
-def delete_conversation(conv_id: str) -> None:
+def delete_conversation(conv_id: str, user_id: Optional[str] = None) -> None:
+    """Deletes conversation and associated messages, isolated strictly to owning user."""
     try:
-        run_async(db.execute("DELETE FROM messages WHERE conversation_id = ?", (conv_id,)))
-        run_async(db.execute("DELETE FROM conversations WHERE id = ?", (conv_id,)))
+        if user_id:
+            run_async(db.execute(
+                "DELETE FROM messages WHERE conversation_id IN (SELECT id FROM conversations WHERE id = ? AND user_id = ?)",
+                (conv_id, user_id)
+            ))
+            run_async(db.execute(
+                "DELETE FROM conversations WHERE id = ? AND user_id = ?",
+                (conv_id, user_id)
+            ))
+        else:
+            run_async(db.execute("DELETE FROM messages WHERE conversation_id = ?", (conv_id,)))
+            run_async(db.execute("DELETE FROM conversations WHERE id = ?", (conv_id,)))
     except Exception:
         pass
 
@@ -986,6 +1093,102 @@ temperature = float(st.session_state["temperature_val"])
 context_tokens = int(st.session_state["context_tokens_val"])
 system_instruction = st.session_state["sys_inst_val"]
 
+def render_login_portal():
+    """
+    Renders the enterprise login portal backed by Account Management.xlsx.
+    Requires username and password authentication before any app modules or data load.
+    Rules for Account Management:
+      1. Only Admin can add or remove user
+      2. Every user should have separate workspace
+      3. Multiple user should be able to login and use application
+      4. Use a load balancer to smooth operation
+      5. Use this excel sheet as the database for user management
+    """
+    st.markdown("""
+    <div style="text-align: center; margin-top: 2rem; margin-bottom: 1.5rem;">
+        <div style="display: inline-flex; background: linear-gradient(135deg, #4f46e5 0%, #6366f1 100%); color: white; width: 60px; height: 60px; border-radius: 18px; align-items: center; justify-content: center; font-size: 2rem; box-shadow: 0 4px 14px rgba(79, 70, 229, 0.35); margin-bottom: 0.85rem;">
+            ⚡
+        </div>
+        <h1 style="font-weight: 800; color: #0f172a; margin: 0; font-size: 1.85rem; letter-spacing: -0.02em;">Local AI Workbench</h1>
+        <p style="color: #64748b; font-size: 0.95rem; margin-top: 0.4rem; font-weight: 500;">Enterprise Multi-User Studio • Private & Air-Gapped</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    _, col_form, _ = st.columns([1, 1.4, 1])
+    with col_form:
+        st.markdown("""
+        <div style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 14px; padding: 1.25rem 1.5rem 0.5rem; box-shadow: 0 4px 16px -2px rgba(0, 0, 0, 0.05); margin-bottom: 1rem;">
+            <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.25rem;">
+                <span style="font-size: 1.2rem;">🔐</span>
+                <span style="font-weight: 700; font-size: 1.15rem; color: #0f172a;">Account Sign In</span>
+            </div>
+            <div style="font-size: 0.82rem; color: #64748b; margin-bottom: 0.5rem;">
+                Sign in with credentials configured in <code style="color: #4f46e5;">Account Management.xlsx</code>.
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        with st.form("workbench_login_form", clear_on_submit=False):
+            default_user = st.query_params.get("user", "")
+            uname_val = st.text_input("Username", value=default_user, placeholder="Enter username (e.g. achakrabort4, crakha1, admin)", key="input_uname")
+            pass_val = st.text_input("Password", type="password", placeholder="Enter your password", key="input_pword")
+            login_btn = st.form_submit_button("Sign In to Workbench", type="primary", use_container_width=True)
+
+            if login_btn:
+                if not uname_val.strip() or not pass_val.strip():
+                    st.error("Please enter both username and password.")
+                else:
+                    authenticated = account_service.authenticate(uname_val.strip(), pass_val.strip())
+                    if authenticated:
+                        st.session_state["authenticated_user"] = authenticated
+                        st.session_state["session_id"] = load_balancer.register_session(authenticated["username"], authenticated["name"], authenticated["role"])
+                        tool_registry.set_active_workspace(authenticated["workspace_path"])
+                        st.session_state.pop("active_conv_id", None)
+                        st.session_state.pop("loaded_conv_id", None)
+                        st.session_state["messages"] = []
+                        st.success(f"Welcome back, {authenticated['name']}!")
+                        time.sleep(0.3)
+                        st.rerun()
+                    else:
+                        st.error("Invalid username or password. Please verify credentials in 'Account Management.xlsx'.")
+
+        with st.expander("ℹ️ Account Management Rules & Governance", expanded=False):
+            rules = account_service.get_governance_rules()
+            if rules:
+                for r in rules:
+                    if "Rule for" in r:
+                        st.markdown(f"**{r}**")
+                    else:
+                        st.markdown(f"- {r}")
+            else:
+                st.markdown("""
+                - 1. Only Admin can add or remove user
+                - 2. Every user should have separate workspace (`workspace/<username>`)
+                - 3. Multiple users can log in and use application concurrently
+                - 4. Use a load balancer to smooth operation
+                - 5. Use `Account Management.xlsx` as the sole database
+                """)
+
+            st.divider()
+            st.markdown("**Registered User Accounts:**")
+            users_list = account_service.get_all_users()
+            for u in users_list:
+                role_icon = "👑" if u.get("role", "").lower() == "admin" else "👤"
+                st.markdown(f"- {role_icon} **{u['name']}** (`@{u['username']}`) — *{u['role']}*")
+
+# ---------------------------------------------------------
+# AUTHENTICATION & MULTI-USER SESSION STATE (Account Management.xlsx)
+# ---------------------------------------------------------
+if not st.session_state.get("authenticated_user"):
+    render_login_portal()
+    st.stop()
+
+current_user = st.session_state["authenticated_user"]
+tool_registry.set_active_workspace(current_user["workspace_path"])
+user_role = str(current_user.get("role", "User"))
+is_admin = user_role.lower() == "admin"
+curr_uname = current_user.get("username", "")
+
 # ---------------------------------------------------------
 # SIDEBAR NAVIGATION & INFERENCE CONTROLS
 # ---------------------------------------------------------
@@ -1002,20 +1205,66 @@ with st.sidebar:
     </div>
     """, unsafe_allow_html=True)
 
-    # + New Chat (Gemini / ChatGPT Style prominent starter)
-    if st.button("➕ New Chat", use_container_width=True, type="primary"):
-        target_model = st.session_state.get("selected_model_val", model_names[0] if model_names else "gemma4:12b")
-        new_conv_id = create_new_conversation("New Chat", target_model)
-        st.session_state["active_conv_id"] = new_conv_id
-        st.session_state["messages"] = []
-        st.session_state["loaded_conv_id"] = new_conv_id
-        st.rerun()
+    # User Profile & Workspace Card
+    role_badge = "👑 Admin" if is_admin else "👤 User"
+    badge_bg = "#fef3c7" if is_admin else "#eff6ff"
+    badge_color = "#b45309" if is_admin else "#1d4ed8"
+    user_initials = "".join([part[0].upper() for part in current_user.get("name", "User").split()[:2]]) or "U"
+
+    st.markdown(f"""
+    <div style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 0.75rem 0.85rem; margin-bottom: 0.65rem; box-shadow: 0 2px 8px rgba(0,0,0,0.03);">
+        <div style="display: flex; align-items: center; gap: 0.65rem;">
+            <div style="width: 36px; height: 36px; border-radius: 10px; background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%); color: white; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 0.85rem; box-shadow: 0 2px 6px rgba(79, 70, 229, 0.25); flex-shrink: 0;">
+                {user_initials}
+            </div>
+            <div style="flex-grow: 1; min-width: 0;">
+                <div style="display: flex; align-items: center; justify-content: space-between; gap: 4px;">
+                    <span style="font-weight: 700; font-size: 0.86rem; color: #0f172a; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">{current_user.get('name', 'User')}</span>
+                    <span style="background: {badge_bg}; color: {badge_color}; font-size: 0.68rem; font-weight: 700; padding: 2px 6px; border-radius: 5px; flex-shrink: 0;">{role_badge}</span>
+                </div>
+                <div style="font-size: 0.72rem; color: #64748b; margin-top: 1px; display: flex; align-items: center; gap: 4px;">
+                    <span>@{current_user.get('username', 'user')}</span>
+                    <span>•</span>
+                    <span style="font-family: monospace; color: #475569; font-size: 0.68rem;">workspace/{current_user.get('username', 'user')}</span>
+                </div>
+            </div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Action Row: + New Chat & Sign Out
+    col_sn1, col_sn2 = st.columns([1.6, 1])
+    with col_sn1:
+        if st.button("➕ New Chat", use_container_width=True, type="primary"):
+            target_model = st.session_state.get("selected_model_val", model_names[0] if model_names else "gemma4:12b")
+            new_conv_id = create_new_conversation("New Chat", target_model, user_id=curr_uname)
+            st.session_state["active_conv_id"] = new_conv_id
+            st.session_state["messages"] = []
+            st.session_state["loaded_conv_id"] = new_conv_id
+            st.rerun()
+    with col_sn2:
+        if st.button("🚪 Log Out", key="btn_logout", use_container_width=True, help="Log out and return to login screen"):
+            sess_id = st.session_state.get("session_id")
+            if sess_id:
+                load_balancer.unregister_session(sess_id)
+            st.session_state["authenticated_user"] = None
+            st.session_state["session_id"] = None
+            st.session_state.pop("active_conv_id", None)
+            st.session_state.pop("loaded_conv_id", None)
+            st.session_state["messages"] = []
+            st.query_params.clear()
+            st.rerun()
 
     # Module Navigation
-    # All features are unified in the All-in-One Studio & Settings. Developer tabs preserved in code.
+    # Rule 1: Only Admin can access Account Management
+    if is_admin:
+        default_nav = ["💬 All-in-One Studio", "👥 Account Management", "⚙️ More"]
+    else:
+        default_nav = ["💬 All-in-One Studio", "⚙️ More"]
+
     ALL_MODULE_PAGES = [
         "💬 All-in-One Studio",
-        "🎙️ Voice & Audio Chat",
+        "👥 Account Management" if is_admin else None,
         "⚙️ More",
         "🧠 AI Tool Memory Hub",
         "🎨 ComfyUI Image Lab",
@@ -1023,8 +1272,9 @@ with st.sidebar:
         "👁️ Vision Multimodal",
         "⚙️ Diagnostics & Models"
     ]
+    ALL_MODULE_PAGES = [p for p in ALL_MODULE_PAGES if p]
     show_all_modules = st.query_params.get("show_all") in ["1", "true"]
-    nav_options = ALL_MODULE_PAGES if show_all_modules else ["💬 All-in-One Studio", "🎙️ Voice & Audio Chat", "⚙️ More"]
+    nav_options = ALL_MODULE_PAGES if show_all_modules else default_nav
 
     req_page = st.query_params.get("page")
     page_idx = 0
@@ -1043,12 +1293,12 @@ with st.sidebar:
 
     st.divider()
 
-    # Fetch Conversations for History Panel
-    all_conversations = get_conversations(35)
+    # Fetch Conversations for History Panel (Isolated strictly per user, Rule 2 & 3)
+    all_conversations = get_conversations(35, user_id=curr_uname)
     if not all_conversations:
-        init_id = create_new_conversation("New Chat", model_names[0] if model_names else "gemma4:12b")
+        init_id = create_new_conversation("New Chat", model_names[0] if model_names else "gemma4:12b", user_id=curr_uname)
         st.session_state["active_conv_id"] = init_id
-        all_conversations = get_conversations(35)
+        all_conversations = get_conversations(35, user_id=curr_uname)
 
     req_conv = st.query_params.get("conv")
     if req_conv and any(c["id"] == req_conv for c in all_conversations):
@@ -1056,11 +1306,11 @@ with st.sidebar:
 
     if "active_conv_id" not in st.session_state or not any(c["id"] == st.session_state["active_conv_id"] for c in all_conversations):
         st.session_state["active_conv_id"] = all_conversations[0]["id"]
-        st.session_state["messages"] = load_conversation_messages(st.session_state["active_conv_id"])
+        st.session_state["messages"] = load_conversation_messages(st.session_state["active_conv_id"], user_id=curr_uname)
         st.session_state["loaded_conv_id"] = st.session_state["active_conv_id"]
 
     if "loaded_conv_id" not in st.session_state or st.session_state["loaded_conv_id"] != st.session_state["active_conv_id"]:
-        st.session_state["messages"] = load_conversation_messages(st.session_state["active_conv_id"])
+        st.session_state["messages"] = load_conversation_messages(st.session_state["active_conv_id"], user_id=curr_uname)
         st.session_state["loaded_conv_id"] = st.session_state["active_conv_id"]
 
     # 🕒 Chat History Sidebar (Gemini & ChatGPT style)
@@ -1080,19 +1330,19 @@ with st.sidebar:
                     help=f"{raw_t}\nModel: {conv.get('model', 'gemma4:12b')} • Messages: {conv.get('msg_count', 0)}"
                 ):
                     st.session_state["active_conv_id"] = conv["id"]
-                    st.session_state["messages"] = load_conversation_messages(conv["id"])
+                    st.session_state["messages"] = load_conversation_messages(conv["id"], user_id=curr_uname)
                     st.session_state["loaded_conv_id"] = conv["id"]
                     st.rerun()
             with col_c2:
                 if st.button("✕", key=f"del_{conv['id']}", help="Delete chat", use_container_width=True):
-                    delete_conversation(conv["id"])
+                    delete_conversation(conv["id"], user_id=curr_uname)
                     rem = [c for c in all_conversations if c["id"] != conv["id"]]
                     if rem:
                         st.session_state["active_conv_id"] = rem[0]["id"]
-                        st.session_state["messages"] = load_conversation_messages(rem[0]["id"])
+                        st.session_state["messages"] = load_conversation_messages(rem[0]["id"], user_id=curr_uname)
                         st.session_state["loaded_conv_id"] = rem[0]["id"]
                     else:
-                        new_id = create_new_conversation("New Chat", selected_model)
+                        new_id = create_new_conversation("New Chat", selected_model, user_id=curr_uname)
                         st.session_state["active_conv_id"] = new_id
                         st.session_state["messages"] = []
                         st.session_state["loaded_conv_id"] = new_id
@@ -1760,22 +2010,6 @@ def render_diagnostics_section():
                 st.success(f"✅ {dl_st.get('message', 'Model installed!')}")
 
     st.markdown("---")
-    # Voice & Speech Engine Diagnostic Status
-    v_stat = voice_service.get_status()
-    st.markdown("##### 🎙️ Voice & Speech-to-Text Engine")
-    col_v_info1, col_v_info2, col_v_info3 = st.columns(3)
-    with col_v_info1:
-        st.write(f"**Status:** {'🟢 Online & Ready' if v_stat.get('available') else '🔴 Offline'}")
-        st.write(f"**Default Engine:** `{v_stat.get('default_engine', 'google')}`")
-    with col_v_info2:
-        engines_str = ", ".join(v_stat.get("engines", [])) or "None"
-        st.write(f"**Active Engines:** `{engines_str}`")
-        st.write(f"**Microphone Capture:** {'✅ Supported' if v_stat.get('microphone_supported') else '❌ Unsupported'}")
-    with col_v_info3:
-        st.write(f"**Web Speech API:** {'✅ Browser Enabled' if v_stat.get('web_speech_supported') else '❌ Disabled'}")
-        st.caption(v_stat.get("details", ""))
-
-    st.markdown("---")
     st.markdown("##### 💾 Storage & Data Persistence")
     col_s1, col_s2, col_s3 = st.columns(3)
     with col_s1:
@@ -2034,76 +2268,166 @@ st.markdown(brand_banner_html, unsafe_allow_html=True)
 
 # =========================================================
 
-def render_voice_audio_chat_section():
+def render_account_management_section():
     """
-    Dedicated full-featured Voice & Audio Chat Studio.
-    Provides two-way conversational voice chat:
-      - Microphone audio input with automatic speech-to-text.
-      - Streaming Ollama LLM reasoning.
-      - Real-time offline Text-to-Speech audio readout so the assistant talks back.
+    Dedicated Account Management & Multi-User Load Balancer Studio.
+    Implements enterprise governance backed directly by Account Management.xlsx.
     """
-    st.markdown("### 🎙️ Voice & Audio Chat Studio")
-    st.caption("Hands-free, two-way conversational voice chat running 100% locally and privately on your hardware.")
+    if current_user.get("role", "").lower() != "admin":
+        st.warning("⚠️ Access Restricted: Only Admin accounts can access Account Management (Rule 1).")
+        st.stop()
 
-    # Status & Controls Bar
-    v_stat = voice_service.get_status()
-    col_v1, col_v2, col_v3 = st.columns([2.5, 2.5, 1.5])
-    with col_v1:
-        st.markdown(f"**Speech Input:** {'🟢 Online & Ready' if v_stat.get('available') else '🔴 Offline'}")
-        st.caption(f"Engine: {v_stat.get('default_engine', 'google').capitalize()} • Universal 16kHz PCM")
-    with col_v2:
-        st.markdown("**Audio Response:** 🟢 Offline TTS Active")
-        st.caption("Natural voice synthesis for hands-free audio dialogue")
-    with col_v3:
-        auto_speak = st.toggle("🔊 Speak Replies", value=True, key="vac_auto_speak_toggle")
+    st.markdown("### 👥 Account Management & Load Balancer Hub")
+    st.caption("Live user administration backed directly by <code>Account Management.xlsx</code> with real-time multi-user load balancing.", unsafe_allow_html=True)
 
-    st.markdown("---")
+    users = account_service.get_all_users(include_passwords=True)
+    stats = load_balancer.get_stats()
 
-    # Render Conversation Messages with Audio Readout Options
-    for idx, msg in enumerate(st.session_state.messages):
-        if msg.get("role") == "assistant" and not (msg.get("content") or "").strip():
-            continue
-        with st.chat_message(msg["role"]):
-            st.markdown(msg["content"], unsafe_allow_html=True)
-            if msg.get("role") == "assistant":
-                col_play1, col_play2 = st.columns([1.5, 5])
-                with col_play1:
-                    if st.button("🔊 Listen / Read Aloud", key=f"vac_read_{idx}", use_container_width=True):
-                        with st.spinner("Generating speech..."):
-                            wav = voice_service.synthesize_speech_wav(msg["content"])
-                            if wav:
-                                st.audio(wav, format="audio/wav", autoplay=True)
+    # 4 KPI Metrics
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Total Users (Excel DB)", len(users))
+    with col2:
+        st.metric("Active Sessions", stats["active_sessions"])
+    with col3:
+        st.metric("Concurrency Capacity", f"{stats['max_concurrency']} slots")
+    with col4:
+        st.metric("Hardware Load Profile", stats["hardware_profile"])
 
-    st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
+    st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
 
-    # Prominent Voice Recording Input
-    st.markdown("##### 🎙️ Speak to Chat")
-    st.caption("Click the microphone below to record your voice. Your recording will be transcribed and answered immediately:")
-    
-    col_mic_left, col_mic_right = st.columns([4, 1.2])
-    with col_mic_left:
-        vac_audio = st.audio_input("Record voice prompt", key="vac_main_audio_recorder")
-    with col_mic_right:
-        st.write("")
-        st.write("")
-        vac_lang = st.selectbox("Language", ["en-US", "es-ES", "fr-FR", "de-DE", "hi-IN", "zh-CN", "ja-JP"], index=0, key="vac_lang_select")
+    tab_users, tab_lb, tab_rules = st.tabs([
+        "👥 User Accounts (Excel DB)",
+        "⚡ Multi-User Load Balancer",
+        "📜 System Rules & Governance"
+    ])
 
-    if vac_audio is not None:
-        aud_bytes = vac_audio.getvalue()
-        aud_h = hashlib.sha256(aud_bytes).hexdigest()
-        if st.session_state.get("last_transcribed_hash") != aud_h:
-            with st.spinner("🎙️ Transcribing voice prompt..."):
-                res = run_async(voice_service.transcribe(aud_bytes, language=vac_lang))
-                st.session_state["last_transcribed_hash"] = aud_h
-                if res.get("text"):
-                    st.session_state.prompt_input = res["text"]
-                    st.toast(f"Transcribed: {res['text']}", icon="🎙️")
-                    time.sleep(0.3)
-                    st.rerun()
-                elif res.get("is_silent"):
-                    st.info("Silence detected. Please speak closer to your microphone.")
-                elif res.get("error"):
-                    st.error(f"Voice transcription error: {res['error']}")
+    with tab_users:
+        st.markdown("#### 📋 Registered User Accounts")
+        st.caption("User details are persisted strictly in <code>Account Management.xlsx</code>. No separate database is used (Rule 5).", unsafe_allow_html=True)
+
+        user_rows = []
+        for u in users:
+            ws_exists = Path(u["workspace_path"]).exists()
+            user_rows.append({
+                "Name": u["name"],
+                "Username": f"@{u['username']}",
+                "Role": u["role"],
+                "Password": "●●●●●●●●" if u["username"] != "admin" else u["password"],
+                "Workspace Path": u["workspace_path"],
+                "Workspace Status": "Active ✅" if ws_exists else "Provisioning..."
+            })
+        st.dataframe(user_rows, use_container_width=True)
+
+        col_add, col_del = st.columns(2)
+        with col_add:
+            with st.expander("➕ Add New User (Admin Only)", expanded=False):
+                with st.form("add_user_form", clear_on_submit=True):
+                    new_name = st.text_input("Full Name", placeholder="e.g. Sarah Connor")
+                    new_uname = st.text_input("Username", placeholder="e.g. sconnor")
+                    new_pass = st.text_input("Password", type="password", placeholder="Enter secure password")
+                    new_role = st.selectbox("Role", ["User", "Admin"])
+                    submit_add = st.form_submit_button("Create User & Provision Workspace", type="primary")
+
+                    if submit_add:
+                        if not new_name or not new_uname or not new_pass:
+                            st.error("Please fill in all required fields.")
+                        else:
+                            try:
+                                res = account_service.add_user(
+                                    name=new_name,
+                                    username=new_uname,
+                                    password=new_pass,
+                                    role=new_role,
+                                    actor_role=current_user.get("role", "User")
+                                )
+                                st.success(f"User @{res['username']} created successfully! Isolated workspace provisioned at '{res['workspace_path']}'.")
+                                time.sleep(0.5)
+                                st.rerun()
+                            except Exception as ex:
+                                st.error(f"Error adding user: {ex}")
+
+        with col_del:
+            with st.expander("🗑️ Remove User (Admin Only)", expanded=False):
+                removable_users = [u["username"] for u in users if u["username"].lower() != current_user.get("username", "").lower()]
+                if not removable_users:
+                    st.info("No removable accounts available.")
+                else:
+                    target_to_remove = st.selectbox("Select User to Remove", removable_users)
+                    if st.button(f"Delete @{target_to_remove} from Excel DB", type="secondary"):
+                        try:
+                            account_service.remove_user(
+                                username=target_to_remove,
+                                actor_role=current_user.get("role", "User")
+                            )
+                            st.success(f"User @{target_to_remove} successfully removed from Account Management.xlsx.")
+                            time.sleep(0.5)
+                            st.rerun()
+                        except Exception as ex:
+                            st.error(f"Error removing user: {ex}")
+
+    with tab_lb:
+        st.markdown("#### ⚡ Real-Time Multi-User Load Balancer")
+        st.caption("Coordinates concurrent user requests, prevents hardware starvation, and dynamically manages GPU/CPU thread budgeting.")
+
+        lcol1, lcol2, lcol3 = st.columns(3)
+        with lcol1:
+            st.metric("Active Inference Slots", f"{stats['active_requests']} / {stats['max_concurrency']}")
+        with lcol2:
+            st.metric("Queued Requests", stats["queued_requests"])
+        with lcol3:
+            st.metric("Total Completed Tasks", stats["total_completed_requests"])
+
+        st.markdown("##### 👥 Active Multi-User Sessions")
+        active_sess = load_balancer.get_active_sessions()
+        if active_sess:
+            sess_data = [
+                {
+                    "Username": f"@{s['username']}",
+                    "Name": s["name"],
+                    "Role": s["role"],
+                    "Session ID": s["session_id"],
+                    "Last Active": datetime.datetime.fromtimestamp(s["last_active"]).strftime("%H:%M:%S")
+                }
+                for s in active_sess
+            ]
+            st.dataframe(sess_data, use_container_width=True)
+        else:
+            st.info("No active sessions currently tracked.")
+
+        st.markdown("##### 📊 System Telemetry & Headroom")
+        telemetry = get_live_telemetry()
+        st.json({
+            "CPU Utilization": f"{telemetry['cpu']['percent_used']}%",
+            "RAM Available": f"{telemetry['memory']['available_gb']} GB / {telemetry['memory']['total_gb']} GB",
+            "Accelerator": telemetry["accelerator"]["name"],
+            "VRAM Free": f"{telemetry['accelerator']['free_vram_gb']} GB / {telemetry['accelerator']['total_vram_gb']} GB",
+            "Load Profile Tier": stats["hardware_profile"]
+        })
+
+    with tab_rules:
+        st.markdown("#### 📜 Account Management Rules (From Excel Column F)")
+        st.markdown("""
+        The following 5 governance rules are defined directly within <code>Account Management.xlsx</code> and enforced across the platform:
+        """, unsafe_allow_html=True)
+
+        rules = [
+            ("Rule 1: Only Admin can add or remove user", "Enforced", "Non-admin users cannot access the Account Management studio or trigger add/remove actions via UI or API."),
+            ("Rule 2: Every user should have separate workspace", "Enforced", "Each user is automatically assigned an isolated directory at <code>workspace/&lt;username&gt;</code> with strict sandbox checks."),
+            ("Rule 3: Multiple users can log in and use application", "Enforced", "Concurrent sessions and chat histories are isolated per username without collisions."),
+            ("Rule 4: Use a load balancer to smooth operation", "Enforced", "The MultiUserLoadBalancer dynamically schedules Ollama and ComfyUI requests based on hardware headroom."),
+            ("Rule 5: Use this Excel sheet as the database for user management", "Enforced", "User credentials, roles, and profiles are read and saved exclusively in <code>Account Management.xlsx</code> without a SQLite users table.")
+        ]
+        for title, status_text, desc in rules:
+            st.markdown(f"""
+            <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-left: 4px solid #10b981; border-radius: 8px; padding: 0.75rem 1rem; margin-bottom: 0.75rem;">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <span style="font-weight: 700; color: #0f172a;">{title}</span>
+                    <span style="background: #10b98122; color: #059669; font-weight: 700; font-size: 0.75rem; padding: 2px 8px; border-radius: 6px;">{status_text} ✅</span>
+                </div>
+                <div style="color: #64748b; font-size: 0.85rem; margin-top: 4px;">{desc}</div>
+            </div>
+            """, unsafe_allow_html=True)
 
 
 # TAB 1: ALL-IN-ONE STUDIO / CHAT
@@ -2226,65 +2550,34 @@ if selected_page == "💬 All-in-One Studio":
             else:
                 st.markdown(msg["content"], unsafe_allow_html=True)
 
-    # Sleek Chat Action & Voice Bar (Matching Image 2 design)
-    col_act_left, col_act_mid, col_act_mic = st.columns([5.5, 3.8, 1.0])
-    with col_act_left:
+    # Sleek Model Info & Quick Command Chips Bar
+    col_cmd_left, col_cmd_right = st.columns([3.8, 6.2])
+    with col_cmd_left:
         st.markdown(
-            f'<div style="font-size: 0.8rem; color: #475569; font-weight: 600; padding-top: 6px;">'
-            f'<span>+ 🤖 <b>{selected_model}</b></span>'
+            f'<div style="display: flex; align-items: center; gap: 0.5rem; padding-top: 5px;">'
+            f'<span class="command-chip" style="background: #eef2ff; color: #4f46e5; border-color: #c7d2fe;">🤖 <b>{selected_model}</b></span>'
+            f'<span class="command-chip" style="font-size: 0.72rem; color: #64748b;">Context: {context_tokens}</span>'
             f'</div>',
             unsafe_allow_html=True
         )
-    with col_act_mid:
-        v_mode_toggle = st.toggle("🎙️ Voice Chat Mode", value=st.session_state.get("voice_chat_mode", False), key="toggle_st_voice_mode", help="Enable two-way voice chat with spoken audio responses")
-        st.session_state["voice_chat_mode"] = v_mode_toggle
-    with col_act_mic:
-        # Sleek Mic Icon Popover (Directly beside the chat input)
-        with st.popover("🎙️", help="Click to speak (Voice Dictation / Audio Input)"):
-            st.markdown("##### 🎙️ Voice Input")
-            st.caption("Record and speak your prompt to chat hands-free:")
-            inline_mic_rec = st.audio_input("Record Prompt", key="inline_mic_popover_audio")
-            if inline_mic_rec is not None:
-                aud_bytes = inline_mic_rec.getvalue()
-                aud_h = hashlib.sha256(aud_bytes).hexdigest()
-                if st.session_state.get("last_transcribed_hash") != aud_h:
-                    with st.spinner("🎙️ Transcribing voice..."):
-                        t_res = run_async(voice_service.transcribe(aud_bytes))
-                        st.session_state["last_transcribed_hash"] = aud_h
-                        if t_res.get("text"):
-                            st.session_state["voice_transcribed_text"] = t_res["text"]
-                            st.toast(f"Transcribed: \"{t_res['text']}\"", icon="🎙️")
-                        elif t_res.get("is_silent"):
-                            st.info("Silence detected. Please speak closer to microphone.")
-                        elif t_res.get("error"):
-                            st.error(f"Error: {t_res['error']}")
-
-            if st.session_state.get("voice_transcribed_text"):
-                col_vp1, col_vp2 = st.columns([3, 1])
-                with col_vp1:
-                    v_edit = st.text_input("Spoken Prompt", value=st.session_state["voice_transcribed_text"], key="v_edit_inp", label_visibility="collapsed")
-                with col_vp2:
-                    if st.button("🚀 Send", key="v_popover_send_btn", type="primary", use_container_width=True):
-                        st.session_state.prompt_input = v_edit or st.session_state["voice_transcribed_text"]
-                        st.session_state["voice_transcribed_text"] = ""
-                        st.rerun()
-
-    # Active Voice Chat Mode Prominent Banner & Direct Audio Recorder
-    if st.session_state.get("voice_chat_mode"):
-        st.info("🎙️ **Voice Chat Mode Active**: Speak your prompt using the audio recorder below. The assistant will answer with text and spoken audio.")
-        v_mode_rec = st.audio_input("🎙️ Record Voice Prompt (Hands-Free Audio Chat)", key="voice_chat_mode_active_recorder")
-        if v_mode_rec is not None:
-            v_bytes = v_mode_rec.getvalue()
-            v_h = hashlib.sha256(v_bytes).hexdigest()
-            if st.session_state.get("last_transcribed_hash") != v_h:
-                with st.spinner("🎙️ Transcribing voice prompt..."):
-                    t_res = run_async(voice_service.transcribe(v_bytes))
-                    st.session_state["last_transcribed_hash"] = v_h
-                    if t_res.get("text"):
-                        st.session_state.prompt_input = t_res["text"]
-                        st.toast(f"Sending voice prompt: \"{t_res['text']}\"", icon="🎙️")
-                        time.sleep(0.2)
-                        st.rerun()
+    with col_cmd_right:
+        col_c1, col_c2, col_c3, col_c4 = st.columns(4)
+        with col_c1:
+            if st.button("💻 /code", key="chip_code", help="Autonomous Coding Agent: file inspection, diffs & pytest", use_container_width=True):
+                st.session_state.prompt_input = "/code review workspace files and run pytest suite"
+                st.rerun()
+        with col_c2:
+            if st.button("📊 /report", key="chip_report", help="Executive Report Generator", use_container_width=True):
+                st.session_state.prompt_input = "/report Executive Architecture & Performance Assessment"
+                st.rerun()
+        with col_c3:
+            if st.button("🎨 /image", key="chip_image", help="ComfyUI Image Creation", use_container_width=True):
+                st.session_state.prompt_input = "/image A photorealistic futuristic workstation in a cozy minimalist office, cinematic lighting, 8k"
+                st.rerun()
+        with col_c4:
+            if st.button("📥 /pull", key="chip_pull", help="Download AI models from Ollama Library", use_container_width=True):
+                st.session_state.prompt_input = "/pull llama3.2"
+                st.rerun()
 
     # Chat Input Box (Native paperclip support for uploading up to 5 files)
     default_prompt = st.session_state.pop("prompt_input", "")
@@ -2500,7 +2793,10 @@ if selected_page == "💬 All-in-One Studio":
                     unsafe_allow_html=True
                 )
 
-                task_res = run_async(coding_agent_service.create_task(task_description=code_task))
+                task_res = run_async(coding_agent_service.create_task(
+                    task_description=code_task,
+                    workspace_path=str(current_user.get("workspace_path", settings.workspace_root))
+                ))
                 coding_prompt = f"You are an expert autonomous software engineer. The user requested:\n{code_task}\n\nProvide an execution plan and code implementation."
                 
                 status_box.markdown(
@@ -2709,13 +3005,6 @@ if selected_page == "💬 All-in-One Studio":
                     save_chat_message(st.session_state["active_conv_id"], "assistant", full_response)
                     st.session_state.messages.append({"role": "assistant", "content": full_response})
 
-                    # Voice Chat: Synthesize spoken audio reply if voice chat mode is enabled
-                    if st.session_state.get("voice_chat_mode"):
-                        with st.spinner("🔊 Generating spoken audio reply..."):
-                            spoken_wav = voice_service.synthesize_speech_wav(full_response)
-                            if spoken_wav:
-                                st.audio(spoken_wav, format="audio/wav", autoplay=True)
-
                 except Exception as e:
                     err_msg = str(e)
                     if any(term in err_msg for term in ["0xc0000409", "CUDA error", "shared object initialization", "buffer in this application"]):
@@ -2732,6 +3021,9 @@ if selected_page == "💬 All-in-One Studio":
                     save_chat_message(st.session_state["active_conv_id"], "assistant", err_text)
                     st.session_state.messages.append({"role": "assistant", "content": err_text})
 
+
+elif selected_page == "👥 Account Management":
+    render_account_management_section()
 
 # =========================================================
 # TAB: SETTINGS & WORKSPACE CONFIGURATION
@@ -2931,9 +3223,6 @@ elif selected_page in ["⚙️ More", "More", "⚙️ Settings"]:
 # =========================================================
 # TAB 2: AI TOOL MEMORY HUB (DIRECT VIEW FOR DEV MODE)
 # =========================================================
-elif selected_page == "🎙️ Voice & Audio Chat":
-    render_voice_audio_chat_section()
-
 elif selected_page == "🧠 AI Tool Memory Hub":
     render_memory_hub_section()
 
@@ -3113,12 +3402,13 @@ elif selected_page == "💻 Autonomous Coding Agent":
     st.markdown("### 💻 Autonomous Coding Agent")
     st.caption("Inspect local workspace files, propose syntax-safe unified diffs, and execute automated tests.")
 
+    user_ws_path = Path(current_user.get("workspace_path", str(settings.workspace_root)))
     col_files, col_editor, col_agent = st.columns([1, 2, 1.5])
 
     # Left: File Explorer
     with col_files:
-        st.markdown("#### 📁 Workspace Files")
-        tree = coding_agent_service.list_workspace_files()
+        st.markdown(f"#### 📁 Workspace Files (`@{current_user.get('username')}`)")
+        tree = coding_agent_service.list_workspace_files(custom_root=str(user_ws_path))
         workspace_files = [f.path for f in tree.files if not f.is_dir]
         
         selected_file_path = st.selectbox(
@@ -3130,7 +3420,7 @@ elif selected_page == "💻 Autonomous Coding Agent":
     # Center: Code Inspector
     with col_editor:
         st.markdown(f"#### 📄 File: `{selected_file_path}`")
-        full_path = settings.workspace_root / selected_file_path
+        full_path = user_ws_path / selected_file_path
         if full_path.exists() and full_path.is_file():
             try:
                 code_text = full_path.read_text(encoding="utf-8", errors="replace")
@@ -3157,7 +3447,7 @@ elif selected_page == "💻 Autonomous Coding Agent":
                 render_thinking_badge("analysing", "Analysing codebase & workspace files..."),
                 unsafe_allow_html=True
             )
-            task = run_async(coding_agent_service.create_task(task_description=agent_instruction))
+            task = run_async(coding_agent_service.create_task(task_description=agent_instruction, workspace_path=str(user_ws_path)))
             coding_prompt = f"Analyze the codebase instruction and output a clean unified diff:\nInstruction: {agent_instruction}"
             
             status_box.markdown(

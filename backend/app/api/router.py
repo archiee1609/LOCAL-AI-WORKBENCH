@@ -10,10 +10,12 @@ from app.api.automation import router as automation_router
 from app.api.settings import router as settings_router
 from app.api.reports import router as reports_router
 from app.api.voice import router as voice_router
+from app.api.accounts import router as accounts_router
 
 api_router = APIRouter(prefix="/api")
 
 api_router.include_router(health_router)
+api_router.include_router(accounts_router)
 api_router.include_router(ollama_router)
 api_router.include_router(chat_router)
 api_router.include_router(tools_router)

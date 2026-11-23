@@ -6,7 +6,7 @@ import re
 import time
 import uuid
 from pathlib import Path
-from typing import Dict, Any, List, Optional, Callable, Awaitable
+from typing import Dict, Any, List, Optional, Callable, Awaitable, Union
 
 from app.core.config import settings
 from app.core.logging import logger
@@ -65,7 +65,16 @@ class ToolRegistry:
     def __init__(self):
         self._tools: Dict[str, ToolDefinition] = {}
         self._handlers: Dict[str, Callable[[Dict[str, Any]], Awaitable[Any]]] = {}
+        self._active_workspace: Optional[Path] = None
         self._register_default_tools()
+
+    def set_active_workspace(self, workspace_path: Optional[Union[str, Path]] = None):
+        """Sets the active workspace root for sandboxed tool execution."""
+        self._active_workspace = Path(workspace_path).resolve() if workspace_path else None
+
+    def get_workspace_root(self) -> Path:
+        """Returns the effective workspace root (user-specific or global)."""
+        return self._active_workspace or settings.workspace_root
 
     def register_tool(
         self,
@@ -356,11 +365,12 @@ class ToolRegistry:
 
     async def _handle_read_file(self, args: Dict[str, Any]) -> Dict[str, Any]:
         rel_path = args.get("path", "")
-        resolved = resolve_and_validate_path(rel_path)
+        root = self.get_workspace_root()
+        resolved = resolve_and_validate_path(rel_path, workspace_root=root)
         validate_file_size(resolved)
         content = resolved.read_text(encoding="utf-8", errors="replace")
         return {
-            "path": str(resolved.relative_to(settings.workspace_root)),
+            "path": str(resolved.relative_to(root)),
             "content": content,
             "size_bytes": len(content.encode("utf-8")),
             "lines": len(content.splitlines())
@@ -369,7 +379,7 @@ class ToolRegistry:
     async def _handle_search_files(self, args: Dict[str, Any]) -> Dict[str, Any]:
         pattern = args.get("pattern", "*")
         content_search = args.get("content_search")
-        root = settings.workspace_root
+        root = self.get_workspace_root()
         matches = []
 
         for p in root.rglob(pattern):
@@ -393,11 +403,12 @@ class ToolRegistry:
     async def _handle_write_file(self, args: Dict[str, Any]) -> Dict[str, Any]:
         rel_path = args.get("path", "")
         content = args.get("content", "")
-        resolved = resolve_and_validate_path(rel_path, allow_creation=True)
+        root = self.get_workspace_root()
+        resolved = resolve_and_validate_path(rel_path, workspace_root=root, allow_creation=True)
         resolved.parent.mkdir(parents=True, exist_ok=True)
         resolved.write_text(content, encoding="utf-8")
         return {
-            "path": str(resolved.relative_to(settings.workspace_root)),
+            "path": str(resolved.relative_to(root)),
             "bytes_written": len(content.encode("utf-8")),
             "status": "written"
         }
@@ -413,13 +424,14 @@ class ToolRegistry:
 
     async def _handle_extract_document(self, args: Dict[str, Any]) -> Dict[str, Any]:
         rel_path = args.get("path", "")
-        resolved = resolve_and_validate_path(rel_path)
+        root = self.get_workspace_root()
+        resolved = resolve_and_validate_path(rel_path, workspace_root=root)
         validate_file_size(resolved)
         text = resolved.read_text(encoding="utf-8", errors="replace")
         lines = text.splitlines()
         preview = lines[:20]
         return {
-            "path": str(resolved.relative_to(settings.workspace_root)),
+            "path": str(resolved.relative_to(root)),
             "total_lines": len(lines),
             "total_words": len(text.split()),
             "preview_lines": preview
@@ -430,17 +442,19 @@ class ToolRegistry:
         allowed = ["pytest", "python -m unittest", "npm test"]
         if framework not in allowed:
             raise ValueError(f"Command '{framework}' is not an approved test framework ({', '.join(allowed)}).")
-        cmd_result = await run_command_safely(framework, cwd=settings.workspace_root, timeout=60, approved=True)
+        root = self.get_workspace_root()
+        cmd_result = await run_command_safely(framework, cwd=root, timeout=60, approved=True)
         return cmd_result.to_dict()
 
     async def _handle_git_status(self, args: Dict[str, Any]) -> Dict[str, Any]:
-        git_dir = settings.workspace_root / ".git"
+        root = self.get_workspace_root()
+        git_dir = root / ".git"
         if not git_dir.exists():
             return {"is_git_repo": False, "message": "Authorized workspace is not a Git repository."}
         
-        status_res = await run_command_safely("git status --porcelain", cwd=settings.workspace_root, timeout=15)
-        diff_res = await run_command_safely("git diff", cwd=settings.workspace_root, timeout=15)
-        branch_res = await run_command_safely("git rev-parse --abbrev-ref HEAD", cwd=settings.workspace_root, timeout=15)
+        status_res = await run_command_safely("git status --porcelain", cwd=root, timeout=15)
+        diff_res = await run_command_safely("git diff", cwd=root, timeout=15)
+        branch_res = await run_command_safely("git rev-parse --abbrev-ref HEAD", cwd=root, timeout=15)
 
         return {
             "is_git_repo": True,

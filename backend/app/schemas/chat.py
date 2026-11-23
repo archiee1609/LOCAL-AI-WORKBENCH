@@ -25,6 +25,7 @@ class ConversationCreate(BaseModel):
     system_prompt: Optional[str] = ""
     temperature: Optional[float] = 0.7
     context_length: Optional[int] = 8192
+    user_id: Optional[str] = None
 
 class ConversationUpdate(BaseModel):
     title: Optional[str] = None
@@ -43,6 +44,7 @@ class ConversationResponse(BaseModel):
     created_at: str
     updated_at: str
     message_count: Optional[int] = 0
+    user_id: Optional[str] = ""
 
 class ChatCompletionRequest(BaseModel):
     conversation_id: str

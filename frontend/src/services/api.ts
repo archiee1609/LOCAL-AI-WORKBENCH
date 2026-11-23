@@ -20,7 +20,9 @@ import {
   ModelPullProgress,
   ModelRecommendationsResponse,
   ReportGenerateRequest,
-  ReportGenerateResponse
+  ReportGenerateResponse,
+  UserProfile,
+  LoadBalancerStats
 } from '../types';
 
 const API_BASE = '/api';
@@ -274,6 +276,11 @@ export const api = {
       method: 'DELETE'
     }).then(r => handleResponse<any>(r)),
 
+  getModelRecommendations: () =>
+    fetch(`${API_BASE}/ollama/recommendations`).then(r =>
+      handleResponse<ModelRecommendationsResponse>(r)
+    ),
+
   // Reports
   generateReport: (data: ReportGenerateRequest) =>
     fetch(`${API_BASE}/reports/generate`, {
@@ -302,5 +309,36 @@ export const api = {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ audio_base64: audioBase64, language }),
-    }).then(r => handleResponse<any>(r))
+    }).then(r => handleResponse<any>(r)),
+
+  // Account Management & Auth (Backed directly by Account Management.xlsx)
+  login: (username: string, password: string) =>
+    fetch(`${API_BASE}/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password })
+    }).then(r => handleResponse<{ status: string; user: UserProfile; session_id: string; workspace: string }>(r)),
+
+  logout: (sessionId?: string) =>
+    fetch(`${API_BASE}/auth/logout${sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : ''}`, {
+      method: 'POST'
+    }).then(r => handleResponse<{ status: string; message: string }>(r)),
+
+  getUsers: () =>
+    fetch(`${API_BASE}/accounts/users`).then(r => handleResponse<UserProfile[]>(r)),
+
+  createUser: (data: { name: string; username: string; password: string; role?: string }, actorRole: string = 'Admin') =>
+    fetch(`${API_BASE}/accounts/users?actor_role=${encodeURIComponent(actorRole)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    }).then(r => handleResponse<UserProfile>(r)),
+
+  deleteUser: (username: string, actorRole: string = 'Admin') =>
+    fetch(`${API_BASE}/accounts/users/${encodeURIComponent(username)}?actor_role=${encodeURIComponent(actorRole)}`, {
+      method: 'DELETE'
+    }).then(r => handleResponse<{ success: boolean; message: string; deleted_username: string }>(r)),
+
+  getLoadBalancerStats: () =>
+    fetch(`${API_BASE}/accounts/load-balancer`).then(r => handleResponse<LoadBalancerStats>(r))
 };

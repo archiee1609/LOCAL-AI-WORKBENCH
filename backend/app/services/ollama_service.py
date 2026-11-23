@@ -12,6 +12,7 @@ import httpx
 from app.core.config import settings
 from app.core.logging import logger
 from app.core.resource_balancer import get_balanced_ollama_options
+from app.core.load_balancer import load_balancer
 from app.schemas.models import ModelDetails, ModelCapabilities, ModelOptions
 
 PREFERRED_MODEL_HINTS = ["gpt-oss", "gemma4:12b"]
@@ -314,11 +315,12 @@ class OllamaService:
         if tools:
             payload["tools"] = tools
 
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            res = await client.post(f"{self.base_url}/api/chat", json=payload)
-            if res.status_code != 200:
-                raise RuntimeError(f"Ollama chat error HTTP {res.status_code}: {res.text}")
-            return res.json()
+        async with load_balancer.guard("ollama", "chat"):
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                res = await client.post(f"{self.base_url}/api/chat", json=payload)
+                if res.status_code != 200:
+                    raise RuntimeError(f"Ollama chat error HTTP {res.status_code}: {res.text}")
+                return res.json()
 
     async def stream_chat(
         self,
@@ -339,29 +341,30 @@ class OllamaService:
         if tools:
             payload["tools"] = tools
 
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            async with client.stream("POST", f"{self.base_url}/api/chat", json=payload) as response:
-                if response.status_code == 200:
-                    buffer = ""
-                    async for chunk in response.aiter_text():
-                        buffer += chunk
-                        while "\n" in buffer:
-                            line, buffer = buffer.split("\n", 1)
-                            line = line.strip()
-                            if line:
-                                try:
-                                    yield json.loads(line)
-                                except json.JSONDecodeError:
-                                    pass
-                    if buffer.strip():
-                        try:
-                            yield json.loads(buffer.strip())
-                        except json.JSONDecodeError:
-                            pass
-                    return
+        async with load_balancer.guard("ollama", "stream_chat"):
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                async with client.stream("POST", f"{self.base_url}/api/chat", json=payload) as response:
+                    if response.status_code == 200:
+                        buffer = ""
+                        async for chunk in response.aiter_text():
+                            buffer += chunk
+                            while "\n" in buffer:
+                                line, buffer = buffer.split("\n", 1)
+                                line = line.strip()
+                                if line:
+                                    try:
+                                        yield json.loads(line)
+                                    except json.JSONDecodeError:
+                                        pass
+                        if buffer.strip():
+                            try:
+                                yield json.loads(buffer.strip())
+                            except json.JSONDecodeError:
+                                pass
+                        return
 
-                err_body = await response.aread()
-                err_text = err_body.decode("utf-8", errors="replace")
+                    err_body = await response.aread()
+                    err_text = err_body.decode("utf-8", errors="replace")
 
             # Fallback retry for transient CUDA / buffer overrun in streaming
             if "llama-server" in err_text or "0xc0000409" in err_text or "CUDA" in err_text or "buffer" in err_text:
@@ -535,16 +538,17 @@ class OllamaService:
         if images:
             payload["images"] = images
 
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            res = await client.post(f"{self.base_url}/api/generate", json=payload)
-            if res.status_code == 200:
-                data = res.json()
-                resp_str = data.get("response", "")
-                if not resp_str and data.get("thinking"):
-                    resp_str = f"**Technical Diagnostic Findings (Reasoning):**\n\n{data['thinking']}"
-                return OllamaGenerateResponse(resp_str, raw=data)
+        async with load_balancer.guard("ollama", "generate"):
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                res = await client.post(f"{self.base_url}/api/generate", json=payload)
+                if res.status_code == 200:
+                    data = res.json()
+                    resp_str = data.get("response", "")
+                    if not resp_str and data.get("thinking"):
+                        resp_str = f"**Technical Diagnostic Findings (Reasoning):**\n\n{data['thinking']}"
+                    return OllamaGenerateResponse(resp_str, raw=data)
 
-            err_text = res.text
+                err_text = res.text
             # Automatic resilient recovery for llama-server process crash / CUDA buffer overrun
             if res.status_code == 500 and ("llama-server" in err_text or "0xc0000409" in err_text or "CUDA" in err_text or "buffer" in err_text):
                 logger.warning(f"Ollama llama-server error ({res.status_code}): {err_text}. Initiating safe fallback retry...")

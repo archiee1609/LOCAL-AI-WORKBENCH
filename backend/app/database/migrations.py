@@ -128,6 +128,7 @@ CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id
 CREATE INDEX IF NOT EXISTS idx_tools_log_conversation ON tools_log(conversation_id);
 CREATE INDEX IF NOT EXISTS idx_workflow_runs_workflow ON workflow_runs(workflow_id);
 CREATE INDEX IF NOT EXISTS idx_conversations_updated ON conversations(updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_conversations_user ON conversations(user_id);
 """
 
 async def run_migrations() -> None:
@@ -140,6 +141,14 @@ async def run_migrations() -> None:
         pass
     try:
         await db.execute("ALTER TABLE user_memories ADD COLUMN category TEXT DEFAULT 'general'")
+    except Exception:
+        pass
+    try:
+        await db.execute("ALTER TABLE user_memories ADD COLUMN user_id TEXT DEFAULT ''")
+    except Exception:
+        pass
+    try:
+        await db.execute("ALTER TABLE conversations ADD COLUMN user_id TEXT DEFAULT ''")
     except Exception:
         pass
     logger.info("Database schema initialized successfully.")

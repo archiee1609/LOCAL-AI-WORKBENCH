@@ -14,6 +14,17 @@ BACKUP_DIR = DATA_DIR / "backups"
 for d in [DATA_DIR, WORKSPACE_DIR, GENERATED_IMAGES_DIR, BACKUP_DIR]:
     d.mkdir(parents=True, exist_ok=True)
 
+def get_user_workspace(username: Optional[str] = None) -> Path:
+    """Rule 2: Resolves isolated workspace for a given user."""
+    if not username:
+        return WORKSPACE_DIR
+    clean_user = "".join(c for c in str(username) if c.isalnum() or c in ("_", "-")).lower()
+    if not clean_user:
+        clean_user = "guest"
+    target = WORKSPACE_DIR / clean_user
+    target.mkdir(parents=True, exist_ok=True)
+    return target
+
 DEFAULT_SYSTEM_INSTRUCTION: str = """# UNIVERSAL SYSTEM INSTRUCTION: PRINCIPAL ARCHITECT, PM, ANALYST & CREATIVE DIRECTOR
 
 <core_identity>
