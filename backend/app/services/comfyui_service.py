@@ -53,7 +53,7 @@ DEFAULT_COMFYUI_WORKFLOW = {
     "4": {
         "class_type": "CheckpointLoaderSimple",
         "inputs": {
-            "ckpt_name": "v1-5-pruned-emaonly.safetensors"
+            "ckpt_name": "sd_turbo.safetensors"
         }
     },
     "5": {
@@ -546,6 +546,22 @@ class ComfyUIService:
             download_progress=self.download_state
         )
 
+    def start_background_download(self, model_key: str):
+        """Starts the checkpoint download in a dedicated background daemon thread with its own asyncio event loop."""
+        import threading
+        if self.download_state.get("status") == "downloading":
+            return None
+        def _runner():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                loop.run_until_complete(self.download_model_background(model_key))
+            finally:
+                loop.close()
+        t = threading.Thread(target=_runner, daemon=True)
+        t.start()
+        return t
+
     async def download_model_background(self, model_key: str):
         """Asynchronously downloads a checkpoint model to ComfyUI/models/checkpoints/ with progress tracking."""
         model_info = POPULAR_MODELS.get(model_key, POPULAR_MODELS["sd15"])
@@ -679,16 +695,26 @@ class ComfyUIService:
         else:
             workflow["9"]["inputs"]["images"] = ["8", 0]
 
-        # Sampler & Scheduler (default to dpmpp_2m + karras for dramatically higher detail)
-        sampler_name = getattr(req, "sampler_name", None) or "dpmpp_2m"
-        scheduler = getattr(req, "scheduler", None) or "karras"
+        # Sampler & Scheduler (dynamically optimized for Turbo vs standard diffusion checkpoints)
+        is_turbo = "turbo" in chosen_checkpoint.lower()
+        sampler_name = getattr(req, "sampler_name", None)
+        scheduler = getattr(req, "scheduler", None)
         valid_samplers = {"dpmpp_2m", "euler_ancestral", "euler", "ddim", "dpmpp_sde", "uni_pc"}
         valid_schedulers = {"karras", "normal", "exponential", "simple", "sgm_uniform"}
 
-        workflow["3"]["inputs"]["sampler_name"] = sampler_name if sampler_name in valid_samplers else "dpmpp_2m"
-        workflow["3"]["inputs"]["scheduler"] = scheduler if scheduler in valid_schedulers else "karras"
-        workflow["3"]["inputs"]["steps"] = max(12, req.steps or 20)
-        workflow["3"]["inputs"]["cfg"] = req.cfg_scale or 7.0
+        if is_turbo:
+            # SD-Turbo is an adversarial single-step model optimized for 1-4 steps and low CFG (1.0-1.5)
+            workflow["3"]["inputs"]["sampler_name"] = sampler_name if sampler_name in valid_samplers else "euler"
+            workflow["3"]["inputs"]["scheduler"] = scheduler if scheduler in valid_schedulers else "normal"
+            user_steps = req.steps if req.steps is not None and req.steps <= 4 else 2
+            workflow["3"]["inputs"]["steps"] = max(1, min(4, user_steps))
+            user_cfg = req.cfg_scale if req.cfg_scale is not None and req.cfg_scale <= 2.5 else 1.0
+            workflow["3"]["inputs"]["cfg"] = max(1.0, min(2.5, user_cfg))
+        else:
+            workflow["3"]["inputs"]["sampler_name"] = sampler_name if sampler_name in valid_samplers else "dpmpp_2m"
+            workflow["3"]["inputs"]["scheduler"] = scheduler if scheduler in valid_schedulers else "karras"
+            workflow["3"]["inputs"]["steps"] = max(12, req.steps or 20)
+            workflow["3"]["inputs"]["cfg"] = req.cfg_scale or 7.0
 
         # Seed
         seed = req.seed if req.seed is not None and req.seed >= 0 else int(datetime.datetime.now().timestamp() * 1000) % (2**31)
@@ -731,7 +757,8 @@ class ComfyUIService:
         if req.checkpoint and req.checkpoint in available:
             chosen_ckpt = req.checkpoint
         elif available:
-            chosen_ckpt = available[0]
+            turbo_models = [c for c in available if "turbo" in c.lower()]
+            chosen_ckpt = turbo_models[0] if turbo_models else available[0]
 
         if not chosen_ckpt:
             err_msg = (

@@ -132,7 +132,7 @@ class Settings(BaseModel):
     default_context_length: int = 8192
     default_system_instruction: str = DEFAULT_SYSTEM_INSTRUCTION
     
-    # Web search setting (explicit toggle, defaults to False for privacy)
-    enable_web_search: bool = False
+    # Web search setting (enabled for live online information & augmented reasoning)
+    enable_web_search: bool = True
 
 settings = Settings()

@@ -51,7 +51,12 @@ export const ImageLabPage: React.FC = () => {
       setStatus(s);
       if (s.available_checkpoints && s.available_checkpoints.length > 0) {
         if (!selectedCheckpoint || !s.available_checkpoints.includes(selectedCheckpoint)) {
-          setSelectedCheckpoint(s.available_checkpoints[0]);
+          const first = s.available_checkpoints[0];
+          setSelectedCheckpoint(first);
+          if (first.toLowerCase().includes('turbo')) {
+            setSteps(2);
+            setCfgScale(1.0);
+          }
         }
       }
     } catch (e) {
@@ -74,6 +79,17 @@ export const ImageLabPage: React.FC = () => {
     const interval = setInterval(loadStatus, 4000);
     return () => clearInterval(interval);
   }, []);
+
+  const handleCheckpointChange = (ckpt: string) => {
+    setSelectedCheckpoint(ckpt);
+    if (ckpt.toLowerCase().includes('turbo')) {
+      setSteps(2);
+      setCfgScale(1.0);
+    } else {
+      setSteps(20);
+      setCfgScale(7.0);
+    }
+  };
 
   const handleStartComfy = async () => {
     setIsStartingService(true);
@@ -267,7 +283,7 @@ export const ImageLabPage: React.FC = () => {
               {hasCheckpoints ? (
                 <select
                   value={selectedCheckpoint}
-                  onChange={e => setSelectedCheckpoint(e.target.value)}
+                  onChange={e => handleCheckpointChange(e.target.value)}
                   className="input-select text-xs font-medium"
                 >
                   {status?.available_checkpoints.map(ckpt => (
@@ -351,13 +367,13 @@ export const ImageLabPage: React.FC = () => {
             <div className="grid grid-cols-2 gap-3 pt-1">
               <div className="flex flex-col gap-1">
                 <div className="flex justify-between text-2xs font-semibold text-slate-700">
-                  <span>Steps</span>
+                  <span>Steps {selectedCheckpoint.toLowerCase().includes('turbo') ? '(Turbo)' : ''}</span>
                   <span className="font-mono text-indigo-600">{steps}</span>
                 </div>
                 <input
                   type="range"
-                  min={10}
-                  max={50}
+                  min={selectedCheckpoint.toLowerCase().includes('turbo') ? 1 : 10}
+                  max={selectedCheckpoint.toLowerCase().includes('turbo') ? 8 : 50}
                   value={steps}
                   onChange={e => setSteps(parseInt(e.target.value))}
                   className="accent-indigo-600 cursor-pointer"
@@ -372,7 +388,7 @@ export const ImageLabPage: React.FC = () => {
                 <input
                   type="range"
                   min={1.0}
-                  max={20.0}
+                  max={selectedCheckpoint.toLowerCase().includes('turbo') ? 3.0 : 20.0}
                   step={0.5}
                   value={cfgScale}
                   onChange={e => setCfgScale(parseFloat(e.target.value))}

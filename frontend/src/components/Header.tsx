@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Sparkles,
   MessageSquare,
@@ -14,7 +14,9 @@ import {
   HardDrive,
   Shield,
   Bot,
-  Brain
+  Brain,
+  Download,
+  Monitor
 } from 'lucide-react';
 import { ModelDetails } from '../types';
 
@@ -67,6 +69,44 @@ export const Header: React.FC<HeaderProps> = ({
   ];
 
   const folderName = workspacePath ? workspacePath.split('\\').pop() : 'workspace';
+
+  // PWA Install State & Native Desktop Detection
+  const [isStandalone, setIsStandalone] = useState(false);
+  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+
+  useEffect(() => {
+    const checkStandalone =
+      window.matchMedia('(display-mode: standalone)').matches ||
+      (window.navigator as any).standalone === true;
+    setIsStandalone(checkStandalone);
+
+    const handleBeforeInstallPrompt = (e: Event) => {
+      e.preventDefault();
+      setDeferredPrompt(e);
+    };
+
+    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    window.addEventListener('appinstalled', () => {
+      setIsStandalone(true);
+      setDeferredPrompt(null);
+    });
+
+    return () => {
+      window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    };
+  }, []);
+
+  const handleInstallApp = async () => {
+    if (deferredPrompt) {
+      deferredPrompt.prompt();
+      const { outcome } = await deferredPrompt.userChoice;
+      if (outcome === 'accepted') {
+        setDeferredPrompt(null);
+      }
+    } else {
+      alert('To install Local AI Workbench as an app:\n\n1. Look for the Install icon (⊞ or ⬇) in your browser address bar (top-right).\n2. Or open your browser menu (⋮) and click "Install Local AI Workbench".');
+    }
+  };
 
   return (
     <header className="bg-white/95 backdrop-blur-md border-b border-slate-200/80 select-none shrink-0 shadow-2xs z-30 sticky top-0">
@@ -192,6 +232,26 @@ export const Header: React.FC<HeaderProps> = ({
               <HardDrive size={12} className="text-slate-400" />
               <span>{folderName}</span>
             </div>
+
+            {/* Install Desktop App (PWA) Button */}
+            {!isStandalone ? (
+              <button
+                onClick={handleInstallApp}
+                className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-2xs font-bold bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200/90 shadow-2xs transition"
+                title="Install Local AI Workbench as a Native Web App"
+              >
+                <Download size={12} />
+                <span>Install App</span>
+              </button>
+            ) : (
+              <div
+                className="hidden md:flex items-center gap-1 px-2 py-1 rounded-lg text-2xs font-bold bg-slate-100 text-slate-600 border border-slate-200"
+                title="Running in Standalone Desktop App mode"
+              >
+                <Monitor size={11} className="text-slate-400" />
+                <span>Desktop</span>
+              </div>
+            )}
           </div>
         </div>
       </div>

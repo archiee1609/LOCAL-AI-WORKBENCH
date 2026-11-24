@@ -98,8 +98,36 @@ app.include_router(api_router)
 
 # Mount frontend dist static assets if built
 frontend_dist = settings.base_dir / "frontend" / "dist"
+frontend_public = settings.base_dir / "frontend" / "public"
+
 if (frontend_dist / "assets").exists():
     app.mount("/assets", StaticFiles(directory=str(frontend_dist / "assets")), name="assets")
+
+# Mount PWA icons directory
+icons_dir = frontend_dist / "icons" if (frontend_dist / "icons").exists() else frontend_public / "icons"
+if icons_dir.exists():
+    app.mount("/icons", StaticFiles(directory=str(icons_dir)), name="icons")
+
+@app.get("/manifest.webmanifest")
+@app.get("/manifest.json")
+async def get_manifest():
+    for candidate in [frontend_dist / "manifest.webmanifest", frontend_public / "manifest.webmanifest"]:
+        if candidate.exists():
+            from fastapi.responses import FileResponse
+            return FileResponse(candidate, media_type="application/manifest+json")
+    return JSONResponse(status_code=404, content={"error": "PWA Manifest not found"})
+
+@app.get("/sw.js")
+async def get_service_worker():
+    for candidate in [frontend_dist / "sw.js", frontend_public / "sw.js"]:
+        if candidate.exists():
+            from fastapi.responses import FileResponse
+            return FileResponse(
+                candidate,
+                media_type="application/javascript",
+                headers={"Service-Worker-Allowed": "/", "Cache-Control": "no-cache"}
+            )
+    return JSONResponse(status_code=404, content={"error": "Service Worker not found"})
 
 @app.get("/")
 async def root():

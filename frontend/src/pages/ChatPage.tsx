@@ -329,6 +329,10 @@ export const ChatPage: React.FC<ChatPageProps> = ({ selectedModel, models, ollam
                 if (data.type === 'token') {
                   accumulatedText += data.content;
                   setStreamingContent(accumulatedText);
+                } else if (data.type === 'search_progress') {
+                  setToolStatus(`🌐 Searching web & Wikipedia for: "${data.query}"...`);
+                } else if (data.type === 'search_results') {
+                  setToolStatus(`🌐 Retrieved ${data.results?.length || 0} live web sources.`);
                 } else if (data.type === 'tool_calls_requested') {
                   const names = data.tool_calls.map((t: any) => t.function?.name).join(', ');
                   setToolStatus(`Executing tool: ${names}`);

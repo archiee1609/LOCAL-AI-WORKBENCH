@@ -54,4 +54,5 @@ class ChatCompletionRequest(BaseModel):
     temperature: Optional[float] = None
     context_length: Optional[int] = None
     enable_tools: bool = True
+    enable_web_search: Optional[bool] = True
     stream: bool = True

@@ -1,0 +1,69 @@
+{
+  "name": "Local AI Workbench",
+  "short_name": "AI Workbench",
+  "description": "Private, local-first AI workstation for Studio Chat, ComfyUI Image Generation, Vision, and Coding Tools.",
+  "start_url": "/",
+  "scope": "/",
+  "id": "/?source=pwa",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0f172a",
+  "theme_color": "#4f46e5",
+  "categories": ["productivity", "utilities", "developer tools"],
+  "icons": [
+    {
+      "src": "/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "/icons/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "All-in-One Studio",
+      "short_name": "Studio",
+      "description": "Open private local AI studio chat",
+      "url": "/?tab=power",
+      "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Image Lab",
+      "short_name": "Images",
+      "description": "Generate photorealistic images offline with ComfyUI",
+      "url": "/?tab=image_lab",
+      "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Coding Agent",
+      "short_name": "Coding",
+      "description": "Inspect and patch code with automated diff approval",
+      "url": "/?tab=coding",
+      "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Memory Hub",
+      "short_name": "Memory",
+      "description": "Manage multi-AI persistent memories",
+      "url": "/?tab=memory",
+      "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }]
+    }
+  ]
+}

@@ -14,6 +14,7 @@ from app.core.security import resolve_and_validate_path, validate_file_size, Sec
 from app.core.command_runner import run_command_safely
 from app.database.connection import db
 from app.schemas.tools import ToolDefinition, ToolExecutionResponse
+from app.services.web_search_service import web_search_service
 
 # Safe AST evaluator for math
 SAFE_OPERATORS = {
@@ -347,6 +348,43 @@ class ToolRegistry:
             self._handle_git_status
         )
 
+        # 10. Web Search
+        self.register_tool(
+            ToolDefinition(
+                name="web_search",
+                description="Searches the live web and Wikipedia to retrieve real-time facts, current news, latest documentation, or recent data. Use this when answering questions about events, modern library versions, or information not present in the local training data.",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "The search query keywords"},
+                        "max_results": {"type": "integer", "description": "Number of results to retrieve (default 5, max 10)"}
+                    },
+                    "required": ["query"]
+                },
+                category="web",
+                is_external=True
+            ),
+            self._handle_web_search
+        )
+
+        # 11. Fetch Web Page Content
+        self.register_tool(
+            ToolDefinition(
+                name="fetch_web_page",
+                description="Fetches and extracts clean readable text content from a web URL for deep analysis or citation.",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "url": {"type": "string", "description": "Full HTTP or HTTPS web page URL to fetch"}
+                    },
+                    "required": ["url"]
+                },
+                category="web",
+                is_external=True
+            ),
+            self._handle_fetch_web_page
+        )
+
     # Handlers
     async def _handle_calculator(self, args: Dict[str, Any]) -> Dict[str, Any]:
         expr = args.get("expression", "")
@@ -462,5 +500,21 @@ class ToolRegistry:
             "modified": [line.strip() for line in status_res.stdout.splitlines() if line.strip()],
             "diff": diff_res.stdout[:5000] # return first 5000 chars of diff
         }
+
+    async def _handle_web_search(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        query = str(args.get("query", "")).strip()
+        max_results = int(args.get("max_results", 5))
+        max_results = min(max(max_results, 1), 10)
+        results = await web_search_service.search(query, max_results=max_results)
+        return {
+            "query": query,
+            "total_results": len(results),
+            "results": results,
+            "formatted_context": web_search_service.format_search_context(query, results)
+        }
+
+    async def _handle_fetch_web_page(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        url = str(args.get("url", "")).strip()
+        return await web_search_service.fetch_page(url)
 
 tool_registry = ToolRegistry()

@@ -4,6 +4,7 @@ from app.core.logging import logger
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS conversations (
     id TEXT PRIMARY KEY,
+    user_id TEXT DEFAULT '',
     title TEXT NOT NULL,
     model TEXT NOT NULL,
     system_prompt TEXT DEFAULT '',
@@ -115,6 +116,7 @@ CREATE TABLE IF NOT EXISTS project_memory (
 
 CREATE TABLE IF NOT EXISTS user_memories (
     id TEXT PRIMARY KEY,
+    user_id TEXT DEFAULT '',
     key TEXT NOT NULL,
     content TEXT NOT NULL,
     source_tool TEXT DEFAULT 'custom',
@@ -128,7 +130,6 @@ CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id
 CREATE INDEX IF NOT EXISTS idx_tools_log_conversation ON tools_log(conversation_id);
 CREATE INDEX IF NOT EXISTS idx_workflow_runs_workflow ON workflow_runs(workflow_id);
 CREATE INDEX IF NOT EXISTS idx_conversations_updated ON conversations(updated_at DESC);
-CREATE INDEX IF NOT EXISTS idx_conversations_user ON conversations(user_id);
 """
 
 async def run_migrations() -> None:
@@ -149,6 +150,10 @@ async def run_migrations() -> None:
         pass
     try:
         await db.execute("ALTER TABLE conversations ADD COLUMN user_id TEXT DEFAULT ''")
+    except Exception:
+        pass
+    try:
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_conversations_user ON conversations(user_id)")
     except Exception:
         pass
     logger.info("Database schema initialized successfully.")

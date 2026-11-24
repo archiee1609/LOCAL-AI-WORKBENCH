@@ -11,6 +11,7 @@ from app.core.logging import logger
 from app.database.connection import db
 from app.services.ollama_service import ollama_service
 from app.services.tool_registry import tool_registry
+from app.services.web_search_service import web_search_service
 from app.schemas.chat import (
     ConversationCreate,
     ConversationUpdate,
@@ -290,6 +291,20 @@ async def chat_completions(req: ChatCompletionRequest):
         max_iterations = settings.max_tool_iterations
 
         try:
+            # Proactive search intent detection and factual augmentation
+            search_intent_query = web_search_service.detect_search_intent(req.message)
+            web_search_enabled = req.enable_web_search if req.enable_web_search is not None else settings.enable_web_search
+            if search_intent_query and web_search_enabled:
+                yield f"data: {json.dumps({'type': 'search_progress', 'query': search_intent_query, 'status': 'searching'})}\n\n"
+                search_results = await web_search_service.search(search_intent_query, max_results=5)
+                yield f"data: {json.dumps({'type': 'search_results', 'query': search_intent_query, 'results': search_results})}\n\n"
+                
+                search_context_block = web_search_service.format_search_context(search_intent_query, search_results)
+                current_messages.append({
+                    "role": "system",
+                    "content": f"[Live Web Search Context for '{search_intent_query}']:\n{search_context_block}"
+                })
+
             while iterations < max_iterations:
                 iterations += 1
                 stream_gen = ollama_service.stream_chat(
@@ -355,6 +370,10 @@ async def chat_completions(req: ChatCompletionRequest):
                             "error": tool_res.error
                         })
                         yield f"data: {tool_output_payload}\n\n"
+
+                        if t_name == "web_search" and isinstance(tool_res.result, dict):
+                            s_items = tool_res.result.get("results", [])
+                            yield f"data: {json.dumps({'type': 'search_results', 'query': t_args.get('query', ''), 'results': s_items})}\n\n"
 
                         # Feed tool result back to model as role: tool
                         current_messages.append({

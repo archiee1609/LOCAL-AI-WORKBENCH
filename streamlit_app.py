@@ -76,6 +76,7 @@ from app.database.migrations import run_migrations
 from app.services.ollama_service import ollama_service
 from app.services.comfyui_service import comfyui_service, POPULAR_MODELS, parse_resolution_from_prompt, STYLE_PRESETS
 from app.services.tool_registry import tool_registry
+from app.services.web_search_service import web_search_service
 from app.services.coding_agent_service import coding_agent_service
 from app.services.document_service import process_uploaded_files, extract_file_data
 from app.services.model_download_service import model_download_manager, parse_model_names
@@ -111,6 +112,52 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
+# PWA Installability Injection (Allows installing as desktop app from Chrome/Edge like YouTube Music)
+def inject_pwa_support():
+    pwa_code = """
+    <script>
+    (function() {
+        try {
+            const doc = window.parent ? window.parent.document : document;
+            const win = window.parent || window;
+            
+            if (!doc.querySelector('link[rel="manifest"]')) {
+                const link = doc.createElement('link');
+                link.rel = 'manifest';
+                link.href = '/app/static/manifest.webmanifest';
+                doc.head.appendChild(link);
+            }
+            
+            if (!doc.querySelector('link[rel="apple-touch-icon"]')) {
+                const iconLink = doc.createElement('link');
+                iconLink.rel = 'apple-touch-icon';
+                iconLink.href = '/app/static/icons/icon-192.png';
+                doc.head.appendChild(iconLink);
+            }
+            
+            if (!doc.querySelector('meta[name="theme-color"]')) {
+                const meta = doc.createElement('meta');
+                meta.name = 'theme-color';
+                meta.content = '#4f46e5';
+                doc.head.appendChild(meta);
+            }
+            
+            if ('serviceWorker' in win.navigator) {
+                win.navigator.serviceWorker.register('/app/static/sw.js', { scope: '/' })
+                    .then(reg => console.log('[Streamlit PWA] Service Worker active:', reg.scope))
+                    .catch(err => console.debug('[Streamlit PWA] SW notice:', err));
+            }
+        } catch(e) {
+            console.debug('[Streamlit PWA] Error attaching to window.parent:', e);
+        }
+    })();
+    </script>
+    """
+    import streamlit.components.v1 as components
+    components.html(pwa_code, height=0, width=0)
+
+inject_pwa_support()
 
 # Custom Styling (Ultra-Modern, Aesthetic Enterprise Theme)
 st.markdown("""
@@ -1087,6 +1134,10 @@ if "context_tokens_val" not in st.session_state:
 if "sys_inst_val" not in st.session_state:
     st.session_state["sys_inst_val"] = saved_sys_inst
 
+if "enable_web_search_val" not in st.session_state:
+    saved_search_pref = get_preference("enable_web_search", "true").lower() == "true"
+    st.session_state["enable_web_search_val"] = saved_search_pref
+
 # Active inference parameters used across modules
 selected_model = st.session_state["selected_model_val"]
 temperature = float(st.session_state["temperature_val"])
@@ -2001,7 +2052,7 @@ def render_diagnostics_section():
         else:
             st.caption("No models found in `ComfyUI/models/checkpoints/`.")
             if st.button("📥 Download DreamShaper 8 (2.1GB)", key="diag_dl_dreamshaper", help="Download DreamShaper 8 (Photorealistic SD 1.5)"):
-                asyncio.create_task(comfyui_service.download_model_background("dreamshaper"))
+                comfyui_service.start_background_download("dreamshaper")
                 st.rerun()
             dl_st = comfyui_service.download_state
             if dl_st and dl_st.get("status") == "downloading":
@@ -2561,7 +2612,7 @@ if selected_page == "💬 All-in-One Studio":
             unsafe_allow_html=True
         )
     with col_cmd_right:
-        col_c1, col_c2, col_c3, col_c4 = st.columns(4)
+        col_c1, col_c2, col_c3, col_c4, col_c5 = st.columns([1, 1, 1, 1.05, 0.95])
         with col_c1:
             if st.button("💻 /code", key="chip_code", help="Autonomous Coding Agent: file inspection, diffs & pytest", use_container_width=True):
                 st.session_state.prompt_input = "/code review workspace files and run pytest suite"
@@ -2575,6 +2626,10 @@ if selected_page == "💬 All-in-One Studio":
                 st.session_state.prompt_input = "/image A photorealistic futuristic workstation in a cozy minimalist office, cinematic lighting, 8k"
                 st.rerun()
         with col_c4:
+            if st.button("🌐 /search", key="chip_search", help="Live Web Search: Wikipedia, Bing RSS & real-time facts", use_container_width=True):
+                st.session_state.prompt_input = "/search latest AI breakthroughs 2026"
+                st.rerun()
+        with col_c5:
             if st.button("📥 /pull", key="chip_pull", help="Download AI models from Ollama Library", use_container_width=True):
                 st.session_state.prompt_input = "/pull llama3.2"
                 st.rerun()
@@ -2697,10 +2752,12 @@ if selected_page == "💬 All-in-One Studio":
                     st.session_state.messages.append({"role": "assistant", "content": response_text})
                 else:
                     selected_ckpt = checkpoints[0]
+                    is_turbo_ckpt = "turbo" in selected_ckpt.lower()
                     det_w, det_h = parse_resolution_from_prompt(image_query)
 
+                    status_label = f"Synthesizing high-speed SD-Turbo diffusion ({det_w}×{det_h}, ~3-10s)..." if is_turbo_ckpt else f"Sampling diffusion tensors on CPU ({det_w}×{det_h}, ~60-120s)..."
                     status_box.markdown(
-                        render_thinking_badge("processing", f"Sampling diffusion tensors on CPU ({det_w}×{det_h}, ~60-120s)..."),
+                        render_thinking_badge("processing", status_label),
                         unsafe_allow_html=True
                     )
 
@@ -2709,10 +2766,10 @@ if selected_page == "💬 All-in-One Studio":
                         checkpoint=selected_ckpt,
                         width=det_w,
                         height=det_h,
-                        steps=15,
-                        cfg_scale=7.0,
-                        sampler_name="dpmpp_2m",
-                        scheduler="karras",
+                        steps=1 if is_turbo_ckpt else 15,
+                        cfg_scale=1.0 if is_turbo_ckpt else 7.0,
+                        sampler_name="euler" if is_turbo_ckpt else "dpmpp_2m",
+                        scheduler="normal" if is_turbo_ckpt else "karras",
                         enhance_prompt=True
                     )
                     res = run_async(comfyui_service.generate_image(req))
@@ -2936,6 +2993,37 @@ if selected_page == "💬 All-in-One Studio":
                 if memory_lines:
                     effective_system += "\n\n### Active Long-Term Memories & AI Tool Guidelines:\n" + "\n".join(memory_lines)
 
+                # Check for live web search intent or explicit /search command
+                search_query_target = None
+                clean_prompt = prompt_to_use.strip()
+                if clean_prompt.startswith(("/search ", "!search ", "/web ")):
+                    search_query_target = clean_prompt.split(maxsplit=1)[1].strip()
+                elif st.session_state.get("enable_web_search_val", True):
+                    search_query_target = web_search_service.detect_search_intent(clean_prompt)
+
+                search_citations_md = ""
+                response_placeholder = st.empty()
+
+                if search_query_target:
+                    response_placeholder.markdown(
+                        render_thinking_badge("analysing", f"Searching live web & Wikipedia for '{search_query_target[:42]}' ..."),
+                        unsafe_allow_html=True
+                    )
+                    try:
+                        search_results = run_async(web_search_service.search(search_query_target, max_results=5))
+                        if search_results:
+                            search_ctx_str = web_search_service.format_search_context(search_query_target, search_results)
+                            effective_system += f"\n\n---\n{search_ctx_str}"
+                            c_items = []
+                            for idx, res_item in enumerate(search_results, start=1):
+                                t = res_item.get("title", "Source")
+                                u = res_item.get("url", "#")
+                                s = res_item.get("source", "web")
+                                c_items.append(f"- **[{idx}]** [{t}]({u}) • `{s}`")
+                            search_citations_md = "\n\n---\n**🌐 Verified Web Sources & Citations:**\n" + "\n".join(c_items)
+                    except Exception as s_err:
+                        pass
+
                 # Format conversation history for Ollama
                 ollama_messages = [{"role": "system", "content": effective_system}]
                 for m in st.session_state.messages[-10:]:
@@ -2944,8 +3032,6 @@ if selected_page == "💬 All-in-One Studio":
                         msg_item["images"] = m["raw_images"]
                     ollama_messages.append(msg_item)
 
-                # Stream response with animated status
-                response_placeholder = st.empty()
                 full_response_parts = []
 
                 # Phase 1: Analysing animation
@@ -2995,6 +3081,9 @@ if selected_page == "💬 All-in-One Studio":
 
                     if not full_response:
                         full_response = "⚠️ The inference completed without generating content. Please retry or adjust model parameters."
+
+                    if search_citations_md and search_citations_md not in full_response:
+                        full_response += search_citations_md
 
                     if is_report_content(full_response):
                         response_placeholder.empty()
@@ -3137,6 +3226,19 @@ elif selected_page in ["⚙️ More", "More", "⚙️ Settings"]:
                 key="settings_ctx_select",
                 on_change=on_settings_ctx_change,
                 help="Context window token capacity allocated for prompt, memories, and document context."
+            )
+
+            def on_settings_web_search_change():
+                new_s = st.session_state.get("settings_web_search_toggle", True)
+                set_preference("enable_web_search", "true" if new_s else "false")
+                st.session_state["enable_web_search_val"] = new_s
+
+            st.checkbox(
+                "🌐 Live Web Search & Citations",
+                value=st.session_state.get("enable_web_search_val", True),
+                key="settings_web_search_toggle",
+                on_change=on_settings_web_search_change,
+                help="Retrieves real-time facts, news, and Wikipedia data alongside local LLM inferences."
             )
 
         with col_inf_right:
@@ -3299,8 +3401,7 @@ elif selected_page == "🎨 ComfyUI Image Lab":
             with col_dl:
                 st.write("")
                 if st.button("📥 Get DreamShaper 8", help="Download DreamShaper 8 (Photorealistic SD 1.5, 2.1GB)"):
-                    import asyncio
-                    asyncio.create_task(comfyui_service.download_model_background("dreamshaper"))
+                    comfyui_service.start_background_download("dreamshaper")
                     st.rerun()
         else:
             selected_ckpt = st.selectbox(
@@ -3320,13 +3421,32 @@ elif selected_page == "🎨 ComfyUI Image Lab":
             value="blurry, deformed, low quality, artifacts, distorted, out of focus"
         )
 
+        is_turbo_lab = "turbo" in selected_ckpt.lower()
         col_steps, col_cfg, col_sampler = st.columns([1, 1, 1])
         with col_steps:
-            steps = st.slider("Steps", min_value=12, max_value=30, value=15, help="15 steps with DPM++ 2M Karras produces sharp, crisp details")
+            steps = st.slider(
+                "Steps",
+                min_value=1 if is_turbo_lab else 12,
+                max_value=10 if is_turbo_lab else 30,
+                value=1 if is_turbo_lab else 15,
+                help="1-2 steps for SD-Turbo, 15+ steps for standard models" if is_turbo_lab else "15 steps with DPM++ 2M Karras produces sharp, crisp details"
+            )
         with col_cfg:
-            cfg = st.slider("CFG Scale", min_value=1.0, max_value=15.0, value=7.0, step=0.5)
+            cfg = st.slider(
+                "CFG Scale",
+                min_value=1.0,
+                max_value=3.0 if is_turbo_lab else 15.0,
+                value=1.0 if is_turbo_lab else 7.0,
+                step=0.5,
+                help="Low CFG (1.0-1.5) is essential for SD-Turbo" if is_turbo_lab else "Classifier-Free Guidance strength"
+            )
         with col_sampler:
-            sampler_name = st.selectbox("Sampler", ["dpmpp_2m", "euler_ancestral", "euler", "ddim"], index=0, help="DPM++ 2M Karras is the industry gold standard for sharp photorealism")
+            sampler_name = st.selectbox(
+                "Sampler",
+                ["euler", "dpmpp_2m", "euler_ancestral", "ddim"] if is_turbo_lab else ["dpmpp_2m", "euler_ancestral", "euler", "ddim"],
+                index=0,
+                help="Euler is recommended for SD-Turbo" if is_turbo_lab else "DPM++ 2M Karras is the industry gold standard for sharp photorealism"
+            )
 
         generate_btn = st.button("🎨 Generate Image", type="primary", use_container_width=True)
 
@@ -3335,7 +3455,8 @@ elif selected_page == "🎨 ComfyUI Image Lab":
         preview_container = st.empty()
 
         if generate_btn and img_prompt:
-            with st.spinner(f"Sampling latent diffusion model on CPU ({detected_w}×{detected_h}, typically ~60-120s)..."):
+            spin_msg = f"Synthesizing high-speed SD-Turbo diffusion ({detected_w}×{detected_h}, ~3-10s)..." if is_turbo_lab else f"Sampling latent diffusion model on CPU ({detected_w}×{detected_h}, typically ~60-120s)..."
+            with st.spinner(spin_msg):
                 req = ImageGenerateRequest(
                     prompt=img_prompt,
                     negative_prompt=neg_prompt,
