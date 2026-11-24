@@ -24,7 +24,6 @@ export type NavItem =
   | 'power'
   | 'chat'
   | 'memory'
-  | 'image_lab'
   | 'coding'
   | 'vision'
   | 'tools'
@@ -59,7 +58,6 @@ export const Header: React.FC<HeaderProps> = ({
     { id: 'power', label: 'All-in-One Studio', icon: <Sparkles size={15} />, isFlagship: true, badge: 'PRO' },
     { id: 'chat', label: 'Chat Only', icon: <MessageSquare size={15} /> },
     { id: 'memory', label: 'Memory Hub', icon: <Brain size={15} />, badge: 'AI TOOLS' },
-    { id: 'image_lab', label: 'Image Lab', icon: <ImageIcon size={15} /> },
     { id: 'coding', label: 'Coding Agent', icon: <Code2 size={15} /> },
     { id: 'vision', label: 'Vision Multimodal', icon: <Eye size={15} /> },
     { id: 'tools', label: 'AI Tools', icon: <Wrench size={15} /> },

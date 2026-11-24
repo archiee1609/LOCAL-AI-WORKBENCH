@@ -35,23 +35,9 @@ async def lifespan(app: FastAPI):
     else:
         logger.warning(f"Ollama is currently unreachable at {settings.ollama_base_url}: {health.get('error')}")
 
-    # Automatically start ComfyUI image generator service alongside Ollama
-    try:
-        from app.services.comfyui_service import comfyui_service
-        if comfyui_service.comfy_main.exists():
-            logger.info("Automatically launching ComfyUI service alongside Ollama...")
-            asyncio.create_task(comfyui_service.start_service())
-    except Exception as e:
-        logger.warning(f"Failed to autostart ComfyUI during application lifespan: {e}")
-
     yield
 
     logger.info("Shutting down Local AI Workbench backend...")
-    try:
-        from app.services.comfyui_service import comfyui_service
-        await comfyui_service.stop_service()
-    except Exception:
-        pass
     try:
         await ollama_service.stop_service()
     except Exception:

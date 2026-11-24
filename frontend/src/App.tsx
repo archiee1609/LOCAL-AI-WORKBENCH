@@ -5,7 +5,6 @@ import { ChatPage } from './pages/ChatPage';
 import { MemoryPage } from './pages/MemoryPage';
 import { ToolsPage } from './pages/ToolsPage';
 import { VisionPage } from './pages/VisionPage';
-import { ImageLabPage } from './pages/ImageLabPage';
 import { CodingAgentPage } from './pages/CodingAgentPage';
 import { AutomationPage } from './pages/AutomationPage';
 import { DiagnosticsPage } from './pages/DiagnosticsPage';
@@ -105,7 +104,6 @@ export const App: React.FC = () => {
             models={models}
           />
         )}
-        {activeTab === 'image_lab' && <ImageLabPage />}
         {activeTab === 'coding' && <CodingAgentPage />}
         {activeTab === 'automation' && <AutomationPage />}
         {activeTab === 'diagnostics' && <DiagnosticsPage />}

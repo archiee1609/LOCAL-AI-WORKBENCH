@@ -217,6 +217,62 @@ def extract_file_data(filename: str, file_bytes: bytes) -> Dict[str, Any]:
             "text": text or f"[Spreadsheet {filename} contains no rows]"
         }
 
+    # 4.5. PowerPoint Presentations (.pptx, .ppt)
+    elif ext in [".pptx", ".ppt"]:
+        text = ""
+        try:
+            import pptx
+            prs = pptx.Presentation(io.BytesIO(file_bytes))
+            slide_texts = []
+            for i, slide in enumerate(prs.slides, 1):
+                slide_parts = []
+                for shape in slide.shapes:
+                    if shape.has_text_frame:
+                        for paragraph in shape.text_frame.paragraphs:
+                            p_text = paragraph.text.strip()
+                            if p_text:
+                                slide_parts.append(p_text)
+                    elif shape.has_table:
+                        for row in shape.table.rows:
+                            r_cells = [cell.text.strip() for cell in row.cells if cell.text.strip()]
+                            if r_cells:
+                                slide_parts.append(" | ".join(r_cells))
+                if slide.has_notes_slide and slide.notes_slide.notes_text_frame:
+                    note = slide.notes_slide.notes_text_frame.text.strip()
+                    if note:
+                        slide_parts.append(f"Speaker Notes: {note}")
+
+                if slide_parts:
+                    slide_texts.append(f"### Slide {i}\n" + "\n".join(slide_parts))
+
+            text = "\n\n".join(slide_texts).strip()
+        except ImportError:
+            try:
+                import zipfile
+                import xml.etree.ElementTree as ET
+                with zipfile.ZipFile(io.BytesIO(file_bytes)) as z:
+                    slide_files = sorted([n for n in z.namelist() if n.startswith("ppt/slides/slide") and n.endswith(".xml")])
+                    slide_texts = []
+                    for i, sfile in enumerate(slide_files, 1):
+                        xml_content = z.read(sfile)
+                        root = ET.fromstring(xml_content)
+                        texts = [elem.text.strip() for elem in root.iter() if elem.tag.endswith("}t") and elem.text and elem.text.strip()]
+                        if texts:
+                            slide_texts.append(f"### Slide {i}\n" + "\n".join(texts))
+                    text = "\n\n".join(slide_texts).strip()
+            except Exception as e:
+                text = f"[Error reading PowerPoint presentation {filename}: {e}]"
+        except Exception as e:
+            text = f"[Error reading PowerPoint presentation {filename}: {e}]"
+
+        return {
+            "name": filename,
+            "type": "document",
+            "ext": ext,
+            "size_kb": size_kb,
+            "text": text or f"[PowerPoint presentation {filename} contains no extractable slide text]"
+        }
+
     # 5. HTML / Web Diagnostic Reports (.html, .htm)
     elif ext in [".html", ".htm"]:
         try:

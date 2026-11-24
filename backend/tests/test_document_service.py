@@ -89,3 +89,22 @@ def test_process_multiple_files_and_cap():
     assert "file_4.txt" in result["pills_summary"]
     assert "file_5.txt" not in result["pills_summary"]
     assert len(result["attached_docs_context"]) == 5
+
+
+def test_pptx_presentation_text_extraction():
+    """Verify PowerPoint (.pptx) extraction retrieves slide text."""
+    import pptx
+    import io
+    prs = pptx.Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[0])
+    slide.shapes.title.text = "Project Architecture Overview"
+    slide.placeholders[1].text = "Core features: Local LLMs, Web Search, Coding Agents"
+
+    bio = io.BytesIO()
+    prs.save(bio)
+    file_bytes = bio.getvalue()
+
+    doc = extract_file_data("Architecture.pptx", file_bytes)
+    assert doc["type"] == "document"
+    assert "Project Architecture Overview" in doc["text"]
+    assert "Local LLMs, Web Search" in doc["text"]

@@ -30,7 +30,8 @@ import {
   ZoomIn,
   Brain,
   Mic,
-  MicOff
+  MicOff,
+  Globe
 } from 'lucide-react';
 import { api } from '../services/api';
 import {
@@ -505,8 +506,18 @@ export const PowerChatPage: React.FC<PowerChatPageProps> = ({
     if ((!trimmed && attachedImages.length === 0) || isGenerating) return;
 
     // Intercept slash commands
-    if (trimmed.startsWith('/image ')) {
-      return handleInlineImageGenerate(trimmed.slice(7));
+    if (trimmed.startsWith('/image')) {
+      setInputText('');
+      const botMsg: Message = {
+        id: (Date.now() + 1).toString(),
+        conversation_id: activeConvId || 'default',
+        role: 'assistant',
+        content: "ℹ️ Image generation has been removed. You can use `/search` for live web search, `/report` for structured reports, or `/code` for coding tasks.",
+        images: [],
+        created_at: new Date().toISOString()
+      };
+      setMessages(prev => [...prev, botMsg]);
+      return;
     }
     if (trimmed.startsWith('/report ')) {
       setReportTitle(trimmed.slice(8));
@@ -754,17 +765,17 @@ export const PowerChatPage: React.FC<PowerChatPageProps> = ({
 
             <button
               onClick={() => {
-                setActiveMode('image');
-                setInputText('/image a dramatic cyberpunk city with neon reflections in 8k');
+                setActiveMode('chat');
+                setInputText('/search ');
               }}
               className={`text-2xs px-3 py-1.5 rounded-xl border font-semibold flex items-center gap-1.5 transition ${
-                activeMode === 'image'
+                inputText.startsWith('/search')
                   ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs'
                   : 'bg-slate-50 text-slate-600 border-slate-200 hover:text-slate-900 hover:bg-slate-100'
               }`}
             >
-              <ImageIcon size={13} />
-              <span>Image Generator</span>
+              <Globe size={13} />
+              <span>Web Search</span>
             </button>
 
             <button
@@ -963,14 +974,14 @@ export const PowerChatPage: React.FC<PowerChatPageProps> = ({
                 </button>
 
                 <button
-                  onClick={() => setInputText('/image A photorealistic cyberpunk city at sunset, neon reflections in rain, 8k resolution')}
+                  onClick={() => setInputText('/search latest developments in local LLMs')}
                   className="p-4 bg-white border border-slate-200 rounded-2xl text-left hover:border-indigo-300 hover:shadow-subtle hover:-translate-y-0.5 transition-all flex flex-col gap-1.5 group shadow-2xs"
                 >
                   <div className="flex items-center justify-between">
-                    <span className="text-xs font-bold text-slate-800 group-hover:text-indigo-600 transition">🎨 ComfyUI Image Creation</span>
-                    <span className="text-[10px] text-slate-400 font-mono">/image</span>
+                    <span className="text-xs font-bold text-slate-800 group-hover:text-indigo-600 transition">🌐 Live Web Search</span>
+                    <span className="text-[10px] text-slate-400 font-mono">/search</span>
                   </div>
-                  <span className="text-[11px] text-slate-500 leading-snug">Generate local images directly from chat with ComfyUI</span>
+                  <span className="text-[11px] text-slate-500 leading-snug">Search the live web and synthesize answers with local models</span>
                 </button>
 
                 <button
@@ -1186,11 +1197,9 @@ export const PowerChatPage: React.FC<PowerChatPageProps> = ({
                   }
                 }}
                 placeholder={
-                  activeMode === 'image'
-                    ? "Type image prompt e.g. 'A sleek mechanical robot in a cyber lab'..."
-                    : activeMode === 'code'
+                  activeMode === 'code'
                     ? "Type coding command e.g. 'inspect test files and add assertions'..."
-                    : "Ask anything, type /image <prompt>, /report <topic>, or /code <task>..."
+                    : "Ask anything, attach files, or type /search, /report, /code..."
                 }
                 rows={2}
                 className="w-full bg-transparent border-none outline-none text-xs text-slate-800 placeholder-slate-400 resize-none p-1 leading-relaxed"
@@ -1221,13 +1230,13 @@ export const PowerChatPage: React.FC<PowerChatPageProps> = ({
                   <button
                     type="button"
                     onClick={() => {
-                      setInputText('/image ');
+                      setInputText('/search ');
                     }}
-                    title="Generate image via ComfyUI"
-                    className="px-2 py-1 rounded-lg text-slate-500 hover:text-amber-700 hover:bg-amber-50 transition text-2xs flex items-center gap-1 font-mono border border-transparent hover:border-amber-200"
+                    title="Live Web Search"
+                    className="px-2 py-1 rounded-lg text-slate-500 hover:text-blue-700 hover:bg-blue-50 transition text-2xs flex items-center gap-1 font-mono border border-transparent hover:border-blue-200"
                   >
-                    <ImageIcon size={13} className="text-amber-600" />
-                    <span>/image</span>
+                    <Globe size={13} className="text-blue-600" />
+                    <span>/search</span>
                   </button>
 
                   <button

@@ -4,7 +4,6 @@ from fastapi import APIRouter
 from app.core.config import settings
 from app.schemas.system import DiagnosticsReport, ServiceHealth
 from app.services.ollama_service import ollama_service
-from app.services.comfyui_service import comfyui_service
 from app.database.connection import db
 
 router = APIRouter(prefix="/health", tags=["Health & Diagnostics"])
@@ -16,9 +15,7 @@ async def get_diagnostics():
     ollama_models = await ollama_service.list_models()
     model_names = [m.name for m in ollama_models]
 
-    # Check ComfyUI
-    comfy_status = await comfyui_service.check_status()
-
+    # ComfyUI is disabled
     # Check DB
     db_ok = True
     db_err = None
@@ -46,11 +43,11 @@ async def get_diagnostics():
         ),
         comfyui=ServiceHealth(
             name="ComfyUI",
-            status="healthy" if comfy_status.is_reachable else "unavailable",
+            status="disabled",
             endpoint=settings.comfyui_base_url,
             details={
-                "version": comfy_status.version,
-                "instructions": comfy_status.actionable_instructions
+                "version": "disabled",
+                "instructions": "Image generation and ComfyUI have been disabled per user preference."
             }
         ),
         database=ServiceHealth(

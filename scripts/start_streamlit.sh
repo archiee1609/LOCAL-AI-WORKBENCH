@@ -51,29 +51,7 @@ else
     fi
 fi
 
-# 2. Check & start ComfyUI if present
-if [ -f "${ROOT_DIR}/ComfyUI/main.py" ]; then
-    echo "[*] Checking local ComfyUI service..."
-    if curl -s -m 2 http://127.0.0.1:8188/system_stats >/dev/null 2>&1; then
-        echo "[+] ComfyUI is already ONLINE!"
-    else
-        echo "[*] Auto-starting local ComfyUI in background..."
-        mkdir -p "${ROOT_DIR}/data/logs"
-        COMFY_LOG="${ROOT_DIR}/data/logs/comfyui.log"
-        cd "${ROOT_DIR}/ComfyUI"
-        
-        COMFY_ARGS=("--listen" "127.0.0.1" "--port" "8188")
-        if [ "$(uname -s)" != "Darwin" ]; then
-            COMFY_ARGS+=("--cpu" "--use-split-cross-attention")
-        fi
-        
-        nohup python main.py "${COMFY_ARGS[@]}" >> "${COMFY_LOG}" 2>&1 &
-        cd "${ROOT_DIR}"
-        sleep 2
-    fi
-fi
-
-# 3. Launch Streamlit Application
+# 2. Launch Streamlit Application
 URL="http://127.0.0.1:8501"
 
 if curl -s -m 1 http://127.0.0.1:8501/_stcore/health >/dev/null 2>&1 || curl -s -m 1 http://127.0.0.1:8501 >/dev/null 2>&1; then

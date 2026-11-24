@@ -6,6 +6,7 @@ Dynamically scales concurrency based on real-time hardware telemetry and load pr
 
 import time
 import asyncio
+import threading
 from typing import Dict, Any, List, Optional
 from collections import defaultdict
 from app.core.logging import logger
@@ -23,13 +24,13 @@ class MultiUserLoadBalancer:
     """
 
     def __init__(self):
-        self._lock = asyncio.Lock()
+        self._thread_lock = threading.Lock()
         self._active_sessions: Dict[str, Dict[str, Any]] = {}
         self._user_request_counts: Dict[str, int] = defaultdict(int)
         self._active_requests = 0
         self._queued_requests = 0
         self._total_completed = 0
-        self._semaphore: Optional[asyncio.Semaphore] = None
+        self._semaphore = threading.Semaphore(2)
         self._current_capacity = 2
 
     def _determine_capacity(self) -> int:
@@ -83,15 +84,17 @@ class MultiUserLoadBalancer:
         Queues the request if capacity is reached and ensures smooth execution.
         """
         capacity = self._determine_capacity()
-        if self._semaphore is None or self._current_capacity != capacity:
-            self._semaphore = asyncio.Semaphore(capacity)
-            self._current_capacity = capacity
+        with self._thread_lock:
+            if self._semaphore is None:
+                self._semaphore = threading.Semaphore(capacity)
+                self._current_capacity = capacity
 
         self._queued_requests += 1
         logger.debug(f"[LoadBalancer] User '{username}' queued for '{task_name}' (Queue: {self._queued_requests})")
 
         try:
-            await self._semaphore.acquire()
+            while not self._semaphore.acquire(blocking=False):
+                await asyncio.sleep(0.05)
         finally:
             self._queued_requests = max(0, self._queued_requests - 1)
 

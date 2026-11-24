@@ -55,14 +55,10 @@ def test_streamlit_settings_page_renders_cleanly():
     assert len(at.exception) == 0
 
     if len(at.sidebar.radio) > 0:
-        at.sidebar.radio[0].set_value("⚙️ More").run()
+        at.sidebar.radio[0].set_value("⚙️ Settings").run()
         assert len(at.exception) == 0
-        hardware_markdowns = [m.value for m in at.markdown if "Hardware & Acceleration" in m.value or "Compute Device" in m.value]
-        assert len(hardware_markdowns) > 0
-
-        # Verify Image Generation tab rendered
-        img_tab_markdowns = [m.value for m in at.markdown if "AI Image Generation Studio" in m.value or "Target Resolution" in m.value]
-        assert len(img_tab_markdowns) > 0
+        settings_markdowns = [m.value for m in at.markdown if "Settings" in m.value or "Engines & Diagnostics" in m.value]
+        assert len(settings_markdowns) > 0
 
 
 def test_render_winxp_progress_bar_downloading_and_complete():
@@ -125,7 +121,7 @@ def test_streamlit_quick_command_chips_render_cleanly():
     btn_labels = [b.label for b in at.button]
     assert any("/code" in lbl for lbl in btn_labels)
     assert any("/report" in lbl for lbl in btn_labels)
-    assert any("/image" in lbl for lbl in btn_labels)
+    assert any("/search" in lbl for lbl in btn_labels)
     assert any("/pull" in lbl for lbl in btn_labels)
 
 

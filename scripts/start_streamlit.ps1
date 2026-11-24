@@ -21,17 +21,6 @@ try {
     Start-Sleep -Seconds 3
 }
 
-# 2. Launch ComfyUI service if present
-if (Test-Path "$rootDir\ComfyUI\main.py") {
-    try {
-        $c = Invoke-WebRequest -Uri "http://127.0.0.1:8188/system_stats" -TimeoutSec 1 -ErrorAction Stop
-        Write-Host "[+] ComfyUI server is already ONLINE" -ForegroundColor Green
-    } catch {
-        Write-Host "[*] Auto-starting local ComfyUI alongside Ollama..." -ForegroundColor Green
-        Start-Process python -ArgumentList "$rootDir\ComfyUI\main.py --listen 127.0.0.1 --port 8188 --cpu --use-split-cross-attention" -WorkingDirectory "$rootDir\ComfyUI" -WindowStyle Hidden
-        Start-Sleep -Seconds 3
-    }
-}
 
 Write-Host "`n[*] Starting Local AI Workbench via Streamlit at http://127.0.0.1:8501..." -ForegroundColor Green
 Write-Host "[*] Opening browser..." -ForegroundColor Gray

@@ -53,31 +53,7 @@ else
     fi
 fi
 
-# 2. Check & start ComfyUI if present
-if [ -f "${ROOT_DIR}/ComfyUI/main.py" ]; then
-    echo "[*] Checking local ComfyUI service..."
-    if curl -s -m 2 http://127.0.0.1:8188/system_stats >/dev/null 2>&1; then
-        echo "[+] ComfyUI is already ONLINE!"
-    else
-        echo "[*] Auto-starting local ComfyUI in background..."
-        mkdir -p "${ROOT_DIR}/data/logs"
-        COMFY_LOG="${ROOT_DIR}/data/logs/comfyui.log"
-        cd "${ROOT_DIR}/ComfyUI"
-        
-        # Check Apple Silicon MPS vs CPU
-        COMFY_ARGS=("--listen" "127.0.0.1" "--port" "8188")
-        if [ "$(uname -s)" != "Darwin" ]; then
-            # Non-macOS fallback without CUDA
-            COMFY_ARGS+=("--cpu" "--use-split-cross-attention")
-        fi
-        
-        nohup python main.py "${COMFY_ARGS[@]}" >> "${COMFY_LOG}" 2>&1 &
-        cd "${ROOT_DIR}"
-        sleep 2
-    fi
-fi
-
-# 3. Open browser
+# 2. Open browser
 URL="http://127.0.0.1:8000"
 echo ""
 echo "[*] Starting Local AI Workbench server at ${URL}..."

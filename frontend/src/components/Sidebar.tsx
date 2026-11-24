@@ -21,7 +21,6 @@ export type NavItem =
   | 'power'
   | 'chat'
   | 'tools'
-  | 'image_lab'
   | 'vision'
   | 'coding'
   | 'automation'
@@ -56,7 +55,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const primaryNavItems: Array<{ id: NavItem; label: string; icon: React.ReactNode; isFlagship?: boolean }> = [
     { id: 'power', label: 'All-in-One Studio', icon: <Sparkles size={17} />, isFlagship: true },
     { id: 'chat', label: 'Chat Only', icon: <MessageSquare size={17} /> },
-    { id: 'image_lab', label: 'Image Lab', icon: <ImageIcon size={17} /> },
     { id: 'coding', label: 'Coding Agent', icon: <Code2 size={17} /> },
     { id: 'vision', label: 'Vision Multimodal', icon: <Eye size={17} /> },
     { id: 'tools', label: 'AI Tools', icon: <Wrench size={17} /> },

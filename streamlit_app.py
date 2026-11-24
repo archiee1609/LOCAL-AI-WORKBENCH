@@ -1,7 +1,7 @@
 """
 Local AI Workbench - Streamlit Application
 A unified, private, offline AI workstation running natively on your local hardware.
-Includes Studio Chat, AI Tool Memory Hub, ComfyUI Image Lab, Coding Agent, Vision, and Tools.
+Includes Chat, AI Tool Memory Hub, Coding Agent, Vision, and Tools.
 """
 
 import sys
@@ -26,7 +26,7 @@ BACKEND_DIR = ROOT_DIR / "backend"
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
-# If user executes `python streamlit_app.py` directly, start Ollama & ComfyUI and launch Streamlit runner
+# If user executes `python streamlit_app.py` directly, start Ollama and launch Streamlit runner
 try:
     import streamlit.runtime
     is_in_streamlit_runtime = streamlit.runtime.exists()
@@ -36,7 +36,6 @@ except Exception:
 if not is_in_streamlit_runtime and __name__ == "__main__":
     import subprocess
     from app.services.ollama_service import ollama_service
-    from app.services.comfyui_service import comfyui_service
 
     print("========================================================")
     print("       LOCAL AI WORKBENCH - ALL-IN-ONE LAUNCHER         ")
@@ -47,14 +46,6 @@ if not is_in_streamlit_runtime and __name__ == "__main__":
         print("[+] Ollama service is online!")
     except Exception as e:
         print(f"[!] Ollama status notice: {e}")
-
-    if comfyui_service.comfy_main.exists():
-        print("[*] Checking local ComfyUI engine...")
-        try:
-            asyncio.run(comfyui_service.ensure_running())
-            print("[+] ComfyUI service is online!")
-        except Exception as e:
-            print(f"[!] ComfyUI status notice: {e}")
 
     print("[*] Launching Local AI Workbench via Streamlit at http://127.0.0.1:8501...")
     script_path = str(Path(__file__).resolve())
@@ -74,7 +65,6 @@ from app.core.resource_balancer import get_current_load_profile, get_live_teleme
 from app.database.connection import db
 from app.database.migrations import run_migrations
 from app.services.ollama_service import ollama_service
-from app.services.comfyui_service import comfyui_service, POPULAR_MODELS, parse_resolution_from_prompt, STYLE_PRESETS
 from app.services.tool_registry import tool_registry
 from app.services.web_search_service import web_search_service
 from app.services.coding_agent_service import coding_agent_service
@@ -83,7 +73,6 @@ from app.services.model_download_service import model_download_manager, parse_mo
 from app.services.model_recommendation_service import model_recommendation_service
 from app.services.account_service import account_service
 from app.core.load_balancer import load_balancer
-from app.schemas.image import ImageGenerateRequest
 
 @st.cache_data(ttl=30)
 def get_cached_system_info():
@@ -904,14 +893,12 @@ def initialize_system():
 
 initialize_system()
 
-# Ensure Background Engines (Ollama & ComfyUI)
+# Ensure Background Engines (Ollama)
 @st.cache_resource
 def ensure_background_engines():
-    """Auto-starts Ollama and ComfyUI on first application load."""
+    """Auto-starts Ollama on first application load."""
     if not run_async(ollama_service.is_server_reachable(timeout=2.0)):
         run_async(ollama_service.start_service())
-    if comfyui_service.comfy_main.exists() and not run_async(comfyui_service.is_server_reachable()):
-        run_async(comfyui_service.start_service())
     return True
 
 ensure_background_engines()
@@ -919,25 +906,17 @@ ensure_background_engines()
 # High-Performance Cached Engine Status
 @st.cache_data(ttl=8)
 def get_cached_engine_status():
-    o_online = run_async(ollama_service.is_server_reachable(timeout=1.0))
-    if not o_online:
-        try:
-            run_async(ollama_service.start_service(timeout_seconds=5))
-            o_online = run_async(ollama_service.is_server_reachable(timeout=1.0))
-        except Exception:
-            pass
-
-    o_health = run_async(ollama_service.check_health(timeout=1.5)) if o_online else {"reachable": False}
+    o_online = run_async(ollama_service.is_server_reachable(timeout=3.0))
+    o_health = run_async(ollama_service.check_health(timeout=3.0)) if o_online else {"reachable": False}
     m_list = run_async(ollama_service.list_models()) if o_online else []
-    c_online = run_async(comfyui_service.is_server_reachable(timeout=1.0))
-    return o_online, o_health, m_list, c_online
+    return o_online, o_health, m_list
 
 @st.cache_data(ttl=8)
 def get_cached_models():
-    _, _, m_list, _ = get_cached_engine_status()
+    _, _, m_list = get_cached_engine_status()
     return m_list
 
-ollama_online, ollama_health, models_list, comfy_online = get_cached_engine_status()
+ollama_online, ollama_health, models_list = get_cached_engine_status()
 model_names = [m.name for m in models_list] if models_list else ["gemma4:12b"]
 
 # User Preferences Persistence
@@ -1309,16 +1288,15 @@ with st.sidebar:
     # Module Navigation
     # Rule 1: Only Admin can access Account Management
     if is_admin:
-        default_nav = ["💬 All-in-One Studio", "👥 Account Management", "⚙️ More"]
+        default_nav = ["💬 Chat", "👥 Account Management", "⚙️ Settings"]
     else:
-        default_nav = ["💬 All-in-One Studio", "⚙️ More"]
+        default_nav = ["💬 Chat", "⚙️ Settings"]
 
     ALL_MODULE_PAGES = [
-        "💬 All-in-One Studio",
+        "💬 Chat",
         "👥 Account Management" if is_admin else None,
-        "⚙️ More",
+        "⚙️ Settings",
         "🧠 AI Tool Memory Hub",
-        "🎨 ComfyUI Image Lab",
         "💻 Autonomous Coding Agent",
         "👁️ Vision Multimodal",
         "⚙️ Diagnostics & Models"
@@ -1331,7 +1309,7 @@ with st.sidebar:
     page_idx = 0
     if req_page:
         for i, opt in enumerate(nav_options):
-            if req_page.lower() in opt.lower():
+            if req_page.lower() in opt.lower() or (req_page.lower() in ["more", "settings"] and "settings" in opt.lower()) or (req_page.lower() in ["chat", "studio"] and "chat" in opt.lower()):
                 page_idx = i
                 break
 
@@ -1403,28 +1381,15 @@ with st.sidebar:
 
     # Service Status Pills (Compact footer)
     st.markdown("##### 📡 System Status")
-    col_stat1, col_stat2 = st.columns(2)
-    with col_stat1:
-        if ollama_online:
-            st.markdown('<span class="brand-pill pill-success">🟢 Ollama Online</span>', unsafe_allow_html=True)
-        else:
-            st.markdown('<span class="brand-pill pill-warning">🔴 Ollama Offline</span>', unsafe_allow_html=True)
-    with col_stat2:
-        if comfy_online:
-            st.markdown('<span class="brand-pill pill-success">🟢 ComfyUI Online</span>', unsafe_allow_html=True)
-        else:
-            st.markdown('<span class="brand-pill pill-warning">🟠 ComfyUI Idle</span>', unsafe_allow_html=True)
+    if ollama_online:
+        st.markdown('<span class="brand-pill pill-success">🟢 Ollama Online</span>', unsafe_allow_html=True)
+    else:
+        st.markdown('<span class="brand-pill pill-warning">🔴 Ollama Offline</span>', unsafe_allow_html=True)
 
     if not ollama_online:
         if st.button("▶ Start Ollama", use_container_width=True):
             with st.spinner("Booting local Ollama engine..."):
                 run_async(ollama_service.start_service())
-                st.rerun()
-
-    if not comfy_online and comfyui_service.comfy_main.exists():
-        if st.button("▶ Start ComfyUI", use_container_width=True):
-            with st.spinner("Booting ComfyUI engine with CPU optimization..."):
-                run_async(comfyui_service.start_service())
                 st.rerun()
 
     # Live Auto Load Balancer Telemetry Card (Real-time 2s auto-refresh fragment)
@@ -1734,7 +1699,7 @@ def render_model_recommendations_section(models_list, key_prefix="rec", compact=
 
 def render_diagnostics_section():
     st.markdown("#### ⚙️ Diagnostics & Engine Health")
-    st.caption("Monitor host platform architecture, hardware acceleration, Ollama server, ComfyUI diffusion, and storage.")
+    st.caption("Monitor host platform architecture, hardware acceleration, Ollama server, vector memory, and storage.")
 
     # 1. Host Platform & Compute Hardware Card
     sys_sum = get_cached_system_info()
@@ -1830,7 +1795,7 @@ def render_diagnostics_section():
             f'{lb_prof["description"]}<br>'
             f'{vram_info}{gpu_info}{temp_info}'
             + (f'<br>' if vram_info else '')
-            + f'<b>Auto-Allocated:</b> {lb_prof["optimal_threads"]} CPU Threads • Batch Size: {lb_prof["prompt_batch_size"]} • Safe Context Ceiling: {lb_prof["max_safe_context"]} tokens • ComfyUI Flags: <code>{" ".join(lb_prof["comfyui_cli_flags"]) or "Native Metal"}</code>'
+            + f'<b>Auto-Allocated:</b> {lb_prof["optimal_threads"]} CPU Threads • Batch Size: {lb_prof["prompt_batch_size"]} • Safe Context Ceiling: {lb_prof["max_safe_context"]} tokens'
             f'</div>'
             f'</div>'
         )
@@ -2036,251 +2001,20 @@ def render_diagnostics_section():
         render_download_progress_monitor()
 
     with col_d2:
-        st.markdown("##### 🎨 ComfyUI Diffusion Engine")
-        st.write(f"**Endpoint:** `{settings.comfyui_base_url}`")
-        st.write(f"**Status:** {'🟢 Online & Ready' if comfy_online else '🟠 Idle / Offline'}")
-        if not comfy_online and comfyui_service.comfy_main.exists():
-            if st.button("🚀 Start ComfyUI Engine", key="diag_start_comfy", type="primary"):
-                with st.spinner("Booting ComfyUI engine..."):
-                    run_async(comfyui_service.start_service())
-                    st.rerun()
-        local_checkpoints = comfyui_service.get_local_checkpoints()
-        st.write(f"**Checkpoints in Models Folder:** {len(local_checkpoints)}")
-        if local_checkpoints:
-            for ck in local_checkpoints:
-                st.code(f"models/checkpoints/{ck}")
-        else:
-            st.caption("No models found in `ComfyUI/models/checkpoints/`.")
-            if st.button("📥 Download DreamShaper 8 (2.1GB)", key="diag_dl_dreamshaper", help="Download DreamShaper 8 (Photorealistic SD 1.5)"):
-                comfyui_service.start_background_download("dreamshaper")
-                st.rerun()
-            dl_st = comfyui_service.download_state
-            if dl_st and dl_st.get("status") == "downloading":
-                st.progress(dl_st.get("percent", 0) / 100.0, text=f"📥 {dl_st.get('message', 'Downloading...')}")
-            elif dl_st and dl_st.get("status") == "completed":
-                st.success(f"✅ {dl_st.get('message', 'Model installed!')}")
+        st.markdown("##### 🛡️ AI Workbench Engine Health")
+        st.write(f"**Chat & Inference:** 🟢 Online (`{selected_model}`)")
+        st.write(f"**Web Search Engine:** {'🟢 Online & Active' if settings.enable_web_search else '🟠 Offline / Privacy Mode'}")
+        st.write(f"**Active Workspace:** `{settings.workspace_root.name}`")
+        st.write(f"**Local Database:** `Connected (SQLite WAL Mode)`")
+        st.info("💡 Workbench is optimized for high-speed local inference, autonomous coding, report synthesis, and live web search.")
 
     st.markdown("---")
     st.markdown("##### 💾 Storage & Data Persistence")
-    col_s1, col_s2, col_s3 = st.columns(3)
+    col_s1, col_s2 = st.columns(2)
     with col_s1:
         st.markdown(f"**SQLite Database Path:**\n`{settings.db_path}`")
     with col_s2:
         st.markdown(f"**Workspace Root:**\n`{settings.workspace_root}`")
-    with col_s3:
-        st.markdown(f"**Generated Images:**\n`{settings.generated_images_dir}`")
-
-
-def render_image_generation_section():
-    st.markdown("#### 🎨 AI Image Generation Studio")
-    st.caption("Generate high-quality images locally via ComfyUI. 100% private and offline.")
-
-    # Status & Checkpoints
-    checkpoints = comfyui_service.get_local_checkpoints()
-    if not checkpoints:
-        checkpoints = ["DreamShaper_8_pruned.safetensors", "v1-5-pruned-emaonly.safetensors"]
-
-    # Main Generator Layout: Left Parameters, Right Live Preview
-    col_input, col_out = st.columns([1.1, 1.0])
-
-    with col_input:
-        img_prompt = st.text_area(
-            "Prompt",
-            value=st.session_state.get("settings_gen_prompt_val", ""),
-            placeholder="Describe what you want to create and include resolution up to 8K (e.g. 'A futuristic cyberpunk supercar in a neon city, rain reflections, 8K Ultra HD' or '7680x4320 cinematic landscape')...",
-            height=110,
-            key="img_studio_prompt_input",
-            help="Describe the scene and optionally include resolution tokens like 8K, 4K, 2K, 7680x4320, 3840x2160, 1920x1080, 16:9, landscape, portrait."
-        )
-
-        detected_w, detected_h = parse_resolution_from_prompt(img_prompt or "")
-
-        col_r1, col_r2 = st.columns([1.5, 0.9])
-        with col_r1:
-            res_presets = [
-                f"Auto-detect from prompt ({detected_w} × {detected_h})",
-                "8K Ultra HD (7680 × 4320 — 16:9)",
-                "8K Full Square (8192 × 8192 — 1:1)",
-                "8K Portrait (4320 × 7680 — 9:16)",
-                "4K Ultra HD (3840 × 2160 — 16:9)",
-                "4K Square (4096 × 4096 — 1:1)",
-                "4K Portrait (2160 × 3840 — 9:16)",
-                "2K QHD (2560 × 1440 — 16:9)",
-                "2K Square (2048 × 2048 — 1:1)",
-                "Full HD (1920 × 1080 — 16:9)",
-                "HD 720p (1280 × 720 — 16:9)",
-                "Landscape 4:3 (1024 × 768)",
-                "Portrait 3:4 (768 × 1024)",
-                "Square 1:1 (1024 × 1024)",
-                "Fast Standard (512 × 512)"
-            ]
-            chosen_res = st.selectbox("Resolution / Dimensions", res_presets, index=0, key="img_studio_res_select")
-            if "7680 × 4320" in chosen_res:
-                final_w, final_h = 7680, 4320
-            elif "8192 × 8192" in chosen_res:
-                final_w, final_h = 8192, 8192
-            elif "4320 × 7680" in chosen_res:
-                final_w, final_h = 4320, 7680
-            elif "3840 × 2160" in chosen_res:
-                final_w, final_h = 3840, 2160
-            elif "4096 × 4096" in chosen_res:
-                final_w, final_h = 4096, 4096
-            elif "2160 × 3840" in chosen_res:
-                final_w, final_h = 2160, 3840
-            elif "2560 × 1440" in chosen_res:
-                final_w, final_h = 2560, 1440
-            elif "2048 × 2048" in chosen_res:
-                final_w, final_h = 2048, 2048
-            elif "1920 × 1080" in chosen_res:
-                final_w, final_h = 1920, 1080
-            elif "1280 × 720" in chosen_res:
-                final_w, final_h = 1280, 720
-            elif "1024 × 768" in chosen_res:
-                final_w, final_h = 1024, 768
-            elif "768 × 1024" in chosen_res:
-                final_w, final_h = 768, 1024
-            elif "1024 × 1024" in chosen_res:
-                final_w, final_h = 1024, 1024
-            elif "512 × 512" in chosen_res:
-                final_w, final_h = 512, 512
-            else:
-                final_w, final_h = detected_w, detected_h
-
-        with col_r2:
-            style_choice = st.selectbox(
-                "Style Preset",
-                ["Photorealistic", "Cinematic", "Cyberpunk", "Digital Art", "Anime / Ghibli", "None"],
-                index=0,
-                key="img_studio_style_select"
-            )
-
-        # Advanced options (collapsible)
-        default_ckpt_idx = 0
-        for i, c in enumerate(checkpoints):
-            if "dreamshaper" in c.lower():
-                default_ckpt_idx = i
-                break
-
-        with st.expander("⚙️ Advanced Parameters (Model, Negative Prompt, Quality)", expanded=False):
-            selected_ckpt = st.selectbox("Model Checkpoint", checkpoints, index=default_ckpt_idx, key="img_studio_ckpt_select")
-            neg_prompt = st.text_input("Negative Prompt", value="blurry, deformed, low quality, artifacts, distorted, out of focus", key="img_studio_neg_input")
-            quality_boost = st.checkbox("✨ Quality Boost Filter", value=True, help="Injects professional render tokens to enhance textures and contrast")
-
-        if "selected_ckpt" not in locals():
-            selected_ckpt = checkpoints[default_ckpt_idx]
-            neg_prompt = "blurry, deformed, low quality, artifacts, distorted, out of focus"
-            quality_boost = True
-
-        res_tag = "8K Ultra HD" if (final_w >= 7680 or final_h >= 7680) else "4K Ultra HD" if (final_w >= 3840 or final_h >= 3840) else "2K QHD" if (final_w >= 2560 or final_h >= 2560) else "Full HD" if (final_w >= 1920 or final_h >= 1920) else "HD" if (final_w >= 1280 or final_h >= 1280) else "Standard"
-
-        st.markdown(
-            f'<div style="font-size: 0.8rem; color: #475569; margin: 4px 0 10px 0; display: flex; align-items: center; gap: 8px;">'
-            f'<span>📐 <b>Target Resolution:</b> <code style="background: #e2e8f0; color: #0f172a; padding: 2px 6px; border-radius: 4px; font-weight: 700;">{final_w} × {final_h}</code></span>'
-            f'<span class="brand-pill pill-indigo" style="font-size: 0.72rem;">{res_tag}</span>'
-            f'</div>',
-            unsafe_allow_html=True
-        )
-
-        gen_btn = st.button("🎨 Generate Image", type="primary", use_container_width=True, key="img_studio_gen_btn")
-
-    with col_out:
-        st.markdown("##### 🖼️ Generated Render")
-        render_slot = st.empty()
-
-        if gen_btn:
-            if not img_prompt or not img_prompt.strip():
-                st.warning("⚠️ Please enter a prompt describing the image you want to generate.")
-            else:
-                target_prompt = img_prompt.strip()
-                if not comfy_online and comfyui_service.comfy_main.exists():
-                    with st.spinner("Booting local ComfyUI engine..."):
-                        run_async(comfyui_service.start_service())
-                        time.sleep(1.0)
-
-                with st.spinner(f"Generating image ({final_w}×{final_h}) via ComfyUI..."):
-                    req = ImageGenerateRequest(
-                        prompt=target_prompt,
-                        negative_prompt=neg_prompt,
-                        width=final_w,
-                        height=final_h,
-                        steps=15,
-                        cfg_scale=7.0,
-                        checkpoint=selected_ckpt,
-                        sampler_name="dpmpp_2m",
-                        scheduler="karras",
-                        style_preset=style_choice,
-                        enhance_prompt=quality_boost
-                    )
-                    res = run_async(comfyui_service.generate_image(req))
-
-                if res.status in ["success", "completed"]:
-                    st.session_state["latest_generated_image"] = {
-                        "filename": res.image_filename,
-                        "prompt": target_prompt,
-                        "width": final_w,
-                        "height": final_h,
-                        "seed": res.seed
-                    }
-                    st.rerun()
-                else:
-                    render_slot.error(f"❌ Generation failed: {res.error}")
-
-        # Render latest or placeholder
-        latest = st.session_state.get("latest_generated_image")
-        if latest and latest.get("filename"):
-            img_path = settings.generated_images_dir / latest["filename"]
-            if img_path.exists():
-                render_slot.image(
-                    str(img_path),
-                    caption=f"{latest.get('prompt', '')[:50]}... ({latest.get('width', 512)}×{latest.get('height', 512)})",
-                    use_container_width=True
-                )
-                with open(img_path, "rb") as f:
-                    render_slot.download_button(
-                        "💾 Download Image",
-                        data=f.read(),
-                        file_name=latest["filename"],
-                        mime="image/png",
-                        type="primary",
-                        use_container_width=True,
-                        key="btn_dl_latest_render"
-                    )
-            else:
-                render_slot.info("Enter a prompt on the left and click **Generate Image** to start.")
-        else:
-            render_slot.info("Enter a prompt on the left and click **Generate Image** to start.")
-
-    # Recent Images Gallery
-    st.markdown("---")
-    col_gt, col_gsync = st.columns([4, 1])
-    with col_gt:
-        st.markdown("##### 📸 Recent Image Creations")
-    with col_gsync:
-        if st.button("🔄 Refresh Gallery", key="refresh_settings_gallery_btn", use_container_width=True):
-            run_async(comfyui_service.sync_external_outputs())
-            st.rerun()
-
-    try:
-        run_async(comfyui_service.sync_external_outputs())
-        hist_rows = run_async(db.fetchall("SELECT id, prompt, image_filename, created_at FROM image_history WHERE status = 'completed' ORDER BY created_at DESC LIMIT 6"))
-    except Exception:
-        hist_rows = []
-
-    if hist_rows:
-        g_cols = st.columns(3)
-        for i, row in enumerate(hist_rows):
-            fname = row.get("image_filename")
-            if fname:
-                fpath = settings.generated_images_dir / fname
-                if fpath.exists():
-                    with g_cols[i % 3]:
-                        try:
-                            st.image(str(fpath), caption=row.get("prompt", "")[:40] + "...", use_container_width=True)
-                            with open(fpath, "rb") as f:
-                                st.download_button("💾 Save", data=f.read(), file_name=fname, mime="image/png", key=f"dl_sett_hist_{row.get('id')}", use_container_width=True)
-                        except Exception as img_err:
-                            st.caption(f"⚠️ Image preview unavailable ({fname})")
-
 
 
 # ---------------------------------------------------------
@@ -2306,7 +2040,7 @@ brand_banner_html = (
     f'{active_dl_html}'
     '</div>'
     '<p style="font-size: 0.8rem; color: #64748b; margin: 0.25rem 0 0 0;">'
-    'Local-first AI workstation for private reasoning, ComfyUI image creation, coding agents, and memory sync.'
+    'Local-first AI workstation for private reasoning, coding agents, executive reports, web search, and memory sync.'
     '</p>'
     '</div>'
     '<div style="display: flex; gap: 0.5rem; align-items: center;">'
@@ -2466,7 +2200,7 @@ def render_account_management_section():
             ("Rule 1: Only Admin can add or remove user", "Enforced", "Non-admin users cannot access the Account Management studio or trigger add/remove actions via UI or API."),
             ("Rule 2: Every user should have separate workspace", "Enforced", "Each user is automatically assigned an isolated directory at <code>workspace/&lt;username&gt;</code> with strict sandbox checks."),
             ("Rule 3: Multiple users can log in and use application", "Enforced", "Concurrent sessions and chat histories are isolated per username without collisions."),
-            ("Rule 4: Use a load balancer to smooth operation", "Enforced", "The MultiUserLoadBalancer dynamically schedules Ollama and ComfyUI requests based on hardware headroom."),
+            ("Rule 4: Use a load balancer to smooth operation", "Enforced", "The MultiUserLoadBalancer dynamically schedules Ollama LLM requests based on hardware headroom."),
             ("Rule 5: Use this Excel sheet as the database for user management", "Enforced", "User credentials, roles, and profiles are read and saved exclusively in <code>Account Management.xlsx</code> without a SQLite users table.")
         ]
         for title, status_text, desc in rules:
@@ -2481,9 +2215,9 @@ def render_account_management_section():
             """, unsafe_allow_html=True)
 
 
-# TAB 1: ALL-IN-ONE STUDIO / CHAT
+# TAB 1: CHAT / STUDIO
 # =========================================================
-if selected_page == "💬 All-in-One Studio":
+if selected_page in ["💬 Chat", "💬 All-in-One Studio", "Chat", "All-in-One Studio"]:
     active_conv_meta = next((c for c in all_conversations if c["id"] == st.session_state["active_conv_id"]), None)
     active_title = active_conv_meta["title"] if active_conv_meta else "New Chat"
 
@@ -2535,8 +2269,8 @@ if selected_page == "💬 All-in-One Studio":
         with col1:
             if st.button("🏗️ Architecture Review\n\nAnalyze project architecture & modular patterns", use_container_width=True):
                 st.session_state.prompt_input = "Summarize the key architectural patterns of this application and suggest modular improvements."
-            if st.button("🎨 ComfyUI Image Creation\n\nRender photorealistic images locally with /image", use_container_width=True):
-                st.session_state.prompt_input = "/image A photorealistic cyberpunk city at sunset, neon reflections in rain, 8k resolution"
+            if st.button("🌐 Live Web Search\n\nSearch Wikipedia, news & documentation with /search", use_container_width=True):
+                st.session_state.prompt_input = "/search latest AI breakthroughs 2026"
         with col2:
             if st.button("📄 Executive Report\n\nGenerate structured technical report with /report", use_container_width=True):
                 st.session_state.prompt_input = "/report Executive Architecture and Performance Assessment"
@@ -2612,7 +2346,7 @@ if selected_page == "💬 All-in-One Studio":
             unsafe_allow_html=True
         )
     with col_cmd_right:
-        col_c1, col_c2, col_c3, col_c4, col_c5 = st.columns([1, 1, 1, 1.05, 0.95])
+        col_c1, col_c2, col_c3, col_c4 = st.columns(4)
         with col_c1:
             if st.button("💻 /code", key="chip_code", help="Autonomous Coding Agent: file inspection, diffs & pytest", use_container_width=True):
                 st.session_state.prompt_input = "/code review workspace files and run pytest suite"
@@ -2622,14 +2356,10 @@ if selected_page == "💬 All-in-One Studio":
                 st.session_state.prompt_input = "/report Executive Architecture & Performance Assessment"
                 st.rerun()
         with col_c3:
-            if st.button("🎨 /image", key="chip_image", help="ComfyUI Image Creation", use_container_width=True):
-                st.session_state.prompt_input = "/image A photorealistic futuristic workstation in a cozy minimalist office, cinematic lighting, 8k"
-                st.rerun()
-        with col_c4:
             if st.button("🌐 /search", key="chip_search", help="Live Web Search: Wikipedia, Bing RSS & real-time facts", use_container_width=True):
                 st.session_state.prompt_input = "/search latest AI breakthroughs 2026"
                 st.rerun()
-        with col_c5:
+        with col_c4:
             if st.button("📥 /pull", key="chip_pull", help="Download AI models from Ollama Library", use_container_width=True):
                 st.session_state.prompt_input = "/pull llama3.2"
                 st.rerun()
@@ -2637,7 +2367,7 @@ if selected_page == "💬 All-in-One Studio":
     # Chat Input Box (Native paperclip support for uploading up to 5 files)
     default_prompt = st.session_state.pop("prompt_input", "")
     chat_submission = st.chat_input(
-        "Ask anything, attach up to 5 files (PDF, Word, Code, Images), or use /image, /report, /code, /pull...",
+        "Ask anything, attach up to 5 files (PDF, Word, Code, Images), or use /search, /report, /code, /pull...",
         accept_file="multiple",
         key="main_chat_input"
     )
@@ -2718,83 +2448,19 @@ if selected_page == "💬 All-in-One Studio":
 
         # Assistant processing
         with st.chat_message("assistant"):
-            # Check for inline /image command
-            if prompt_to_use.strip().startswith("/image "):
-                image_query = prompt_to_use.strip()[7:].strip()
-                status_box = st.empty()
-                status_box.markdown(
-                    render_thinking_badge("analysing", f"Analysing prompt for image synthesis: '{image_query[:40]}'"),
-                    unsafe_allow_html=True
-                )
-
-                checkpoints = comfyui_service.get_local_checkpoints()
-                if not checkpoints:
-                    status_box.empty()
-                    tmp_files = list(comfyui_service.checkpoints_dir.glob("*.tmp"))
-                    if tmp_files:
-                        tmp_size_mb = round(tmp_files[0].stat().st_size / (1024 * 1024), 1)
-                        response_text = (
-                            f"### ⏳ Diffusion Checkpoint Downloading\n\n"
-                            f"ComfyUI engine is online, but **no `.safetensors` checkpoint is ready yet**.\n\n"
-                            f"**DreamShaper 8** is currently downloading in the background: "
-                            f"**{tmp_size_mb} MB / ~2,100 MB**.\n\n"
-                            f"- Please wait a couple minutes for the download to finish.\n"
-                            f"- As soon as it completes, your `/image {image_query}` will render immediately!"
-                        )
-                    else:
-                        response_text = (
-                            f"### ⚠️ No Image Checkpoint Installed\n\n"
-                            f"ComfyUI is online, but requires a diffusion model (`.safetensors`) in `ComfyUI/models/checkpoints/` to generate images.\n\n"
-                            f"👉 Go to **More → Engines & Diagnostics** to download DreamShaper 8 (2.1GB) with 1 click."
-                        )
-                    st.warning(response_text)
-                    save_chat_message(st.session_state["active_conv_id"], "assistant", response_text)
-                    st.session_state.messages.append({"role": "assistant", "content": response_text})
-                else:
-                    selected_ckpt = checkpoints[0]
-                    is_turbo_ckpt = "turbo" in selected_ckpt.lower()
-                    det_w, det_h = parse_resolution_from_prompt(image_query)
-
-                    status_label = f"Synthesizing high-speed SD-Turbo diffusion ({det_w}×{det_h}, ~3-10s)..." if is_turbo_ckpt else f"Sampling diffusion tensors on CPU ({det_w}×{det_h}, ~60-120s)..."
-                    status_box.markdown(
-                        render_thinking_badge("processing", status_label),
-                        unsafe_allow_html=True
-                    )
-
-                    req = ImageGenerateRequest(
-                        prompt=image_query,
-                        checkpoint=selected_ckpt,
-                        width=det_w,
-                        height=det_h,
-                        steps=1 if is_turbo_ckpt else 15,
-                        cfg_scale=1.0 if is_turbo_ckpt else 7.0,
-                        sampler_name="euler" if is_turbo_ckpt else "dpmpp_2m",
-                        scheduler="normal" if is_turbo_ckpt else "karras",
-                        enhance_prompt=True
-                    )
-                    res = run_async(comfyui_service.generate_image(req))
-                    status_box.empty()
-
-                    if res.status == "success" or res.status == "completed":
-                        img_path = settings.generated_images_dir / res.image_filename if res.image_filename else None
-                        if img_path and img_path.exists():
-                            st.image(str(img_path), caption=f"{image_query} (Seed: {res.seed})", use_container_width=True)
-                            response_text = f"### 🎨 Generated Image\n\n**Prompt:** *{image_query}*\n**Seed:** `{res.seed}` • **Saved:** `{res.image_filename}`"
-                        else:
-                            response_text = f"Image generated: `{res.image_url}`"
-                    else:
-                        response_text = f"⚠️ Image generation error: {res.error or 'ComfyUI offline'}"
-                    
-                    save_chat_message(st.session_state["active_conv_id"], "assistant", response_text)
-                    st.session_state.messages.append({"role": "assistant", "content": response_text})
+            # Notice if user types deprecated /image command
+            if prompt_to_use.strip().startswith("/image"):
+                response_text = "ℹ️ **Image generation has been removed.** The workbench is focused on conversational Chat, Autonomous Coding (`/code`), Executive Reports (`/report`), and Live Web Search (`/search`)."
+                st.info(response_text)
+                save_chat_message(st.session_state["active_conv_id"], "assistant", response_text)
+                st.session_state.messages.append({"role": "assistant", "content": response_text})
 
             # Check for report generation command or natural language report/PDF request
             is_rep, report_title, rep_scope, rep_attached_ctx = detect_report_request(
                 prompt_to_use, attached_docs_context, st.session_state.messages
             )
 
-            if prompt_to_use.strip().startswith("/image "):
-                # (handled above)
+            if prompt_to_use.strip().startswith("/image"):
                 pass
 
             elif is_rep:
@@ -3095,7 +2761,14 @@ if selected_page == "💬 All-in-One Studio":
                     st.session_state.messages.append({"role": "assistant", "content": full_response})
 
                 except Exception as e:
-                    err_msg = str(e)
+                    err_msg = str(e).strip()
+                    if not err_msg:
+                        err_name = type(e).__name__
+                        if "Timeout" in err_name:
+                            err_msg = "Model inference timed out while loading or generating tokens. Please select a lighter model (e.g. gemma4:12b or llama3.2) or decrease Context Length in Settings."
+                        else:
+                            err_msg = f"{err_name}: Unexpected connection drop from local Ollama engine."
+
                     if any(term in err_msg for term in ["0xc0000409", "CUDA error", "shared object initialization", "buffer in this application"]):
                         err_text = (
                             f"⚠️ **GPU Memory Overrun / CUDA Crash**: Model `{selected_model}` is too large to fit entirely in available VRAM, causing a split GPU/CPU memory crash.\n\n"
@@ -3105,7 +2778,7 @@ if selected_page == "💬 All-in-One Studio":
                             f"- **Safe Flash Attention**: Ollama has been reconfigured with `OLLAMA_FLASH_ATTENTION=false` to prevent CUDA memory crashes."
                         )
                     else:
-                        err_text = f"⚠️ Inference failed: {e}\n\nEnsure Ollama is running on http://127.0.0.1:11434 with model `{selected_model}` installed."
+                        err_text = f"⚠️ Inference failed: {err_msg}\n\nEnsure Ollama is running on http://127.0.0.1:11434 with model `{selected_model}` installed."
                     response_placeholder.error(err_text)
                     save_chat_message(st.session_state["active_conv_id"], "assistant", err_text)
                     st.session_state.messages.append({"role": "assistant", "content": err_text})
@@ -3117,16 +2790,15 @@ elif selected_page == "👥 Account Management":
 # =========================================================
 # TAB: SETTINGS & WORKSPACE CONFIGURATION
 # =========================================================
-elif selected_page in ["⚙️ More", "More", "⚙️ Settings"]:
-    st.markdown("### ⚙️ More — Workspace, Engines & Tools")
-    st.caption("Configure local model inference parameters, system instructions, AI tool memories, background engines, and image generation.")
+elif selected_page in ["⚙️ Settings", "Settings", "⚙️ More", "More"]:
+    st.markdown("### ⚙️ Settings — Workspace, Engines & Preferences")
+    st.caption("Configure local model inference parameters, system instructions, AI tool memories, and engine health.")
 
     req_tab = st.query_params.get("tab")
     tab_titles = [
         "🤖 Model & Inference",
         "🧠 AI Memory Hub",
-        "⚡ Engines & Diagnostics",
-        "🎨 Image Generation"
+        "⚡ Engines & Diagnostics"
     ]
     if req_tab:
         matched = [t for t in tab_titles if req_tab.lower() in t.lower()]
@@ -3142,8 +2814,6 @@ elif selected_page in ["⚙️ More", "More", "⚙️ Settings"]:
             tab_mem = t_obj
         elif "Diagnostics" in title:
             tab_diag = t_obj
-        elif "Image" in title:
-            tab_img = t_obj
 
     with tab_inf:
         st.markdown("#### 🤖 Model Inference Parameters")
@@ -3318,202 +2988,12 @@ elif selected_page in ["⚙️ More", "More", "⚙️ Settings"]:
     with tab_diag:
         render_diagnostics_section()
 
-    with tab_img:
-        render_image_generation_section()
-
 
 # =========================================================
 # TAB 2: AI TOOL MEMORY HUB (DIRECT VIEW FOR DEV MODE)
 # =========================================================
 elif selected_page == "🧠 AI Tool Memory Hub":
     render_memory_hub_section()
-
-
-# =========================================================
-# TAB 3: COMFYUI IMAGE LAB
-# =========================================================
-elif selected_page == "🎨 ComfyUI Image Lab":
-    st.markdown("### 🎨 ComfyUI Image Lab")
-    st.caption("Generate local images on your workstation via ComfyUI. 100% offline and private.")
-
-    # Status Bar
-    col_c1, col_c2, col_c3 = st.columns([2, 2, 1])
-    with col_c1:
-        st.markdown(f"**Service Status:** {'🟢 Online' if comfy_online else '🟠 Offline / Idle'}")
-    with col_c2:
-        checkpoints = comfyui_service.get_local_checkpoints()
-        st.markdown(f"**Checkpoints Detected:** {len(checkpoints)}")
-    with col_c3:
-        if st.button("🔄 Refresh", key="refresh_comfy_btn"):
-            st.rerun()
-
-    if not comfy_online and comfyui_service.comfy_main.exists():
-        st.warning("ComfyUI service is currently idle.")
-        if st.button("▶ Launch ComfyUI Now", use_container_width=True):
-            with st.spinner("Starting ComfyUI engine in background..."):
-                run_async(comfyui_service.start_service())
-                st.rerun()
-
-    # Image Generator Form
-    col_params, col_preview = st.columns([1, 1])
-
-    with col_params:
-        st.markdown("#### ⚙️ Prompt & Parameters")
-        img_prompt = st.text_area(
-            "Prompt",
-            value="A futuristic cyberpunk workstation with neon lights, high detail, 1024x768 wallpaper",
-            height=90,
-            help="Specify resolution directly in your prompt, e.g. '1024x768', '16:9', 'landscape', 'portrait'."
-        )
-
-        detected_w, detected_h = parse_resolution_from_prompt(img_prompt)
-        st.markdown(
-            f'<div style="font-size:0.82rem; color: #475569; margin-top:-6px; margin-bottom:12px; background: #f8fafc; padding: 6px 10px; border-radius: 6px; border: 1px solid #e2e8f0;">'
-            f'📐 <b>Auto-Detected Resolution:</b> <code style="color:#0f172a; font-weight:600; background:#ffffff; padding:2px 6px; border-radius:4px; border: 1px solid #cbd5e1;">{detected_w} × {detected_h}</code> '
-            f'<span style="color:#64748b;">(given in prompt, e.g. <code>1024x768</code>, <code>16:9</code>, <code>portrait</code>, <code>landscape</code>)</span>'
-            f'</div>',
-            unsafe_allow_html=True
-        )
-
-        col_st, col_enh = st.columns([1, 1])
-        with col_st:
-            style_choice = st.selectbox(
-                "🎨 Style Preset",
-                options=["Photorealistic", "Cinematic", "Cyberpunk", "Digital Art", "Anime / Ghibli", "None"],
-                index=0,
-                help="Applies expert lighting, cinematic composition, and high-detail textures"
-            )
-        with col_enh:
-            st.write("")
-            st.write("")
-            enhance_toggle = st.checkbox("✨ Quality Boost", value=True, help="Injects professional render tokens and strong negative filter to eliminate mud/distortion")
-
-        # Checkpoint selection and optional DreamShaper 8 downloader
-        has_dreamshaper = any("dreamshaper" in c.lower() for c in (checkpoints or []))
-        if not has_dreamshaper:
-            col_ck, col_dl = st.columns([2, 1])
-            with col_ck:
-                selected_ckpt = st.selectbox(
-                    "Model Checkpoint",
-                    options=checkpoints if checkpoints else ["v1-5-pruned-emaonly.safetensors"],
-                    index=0
-                )
-            with col_dl:
-                st.write("")
-                if st.button("📥 Get DreamShaper 8", help="Download DreamShaper 8 (Photorealistic SD 1.5, 2.1GB)"):
-                    comfyui_service.start_background_download("dreamshaper")
-                    st.rerun()
-        else:
-            selected_ckpt = st.selectbox(
-                "Model Checkpoint",
-                options=checkpoints,
-                index=0
-            )
-
-        dl_state = comfyui_service.download_state
-        if dl_state and dl_state.get("status") == "downloading":
-            st.progress(dl_state.get("percent", 0) / 100.0, text=f"📥 {dl_state.get('message', 'Downloading...')}")
-        elif dl_state and dl_state.get("status") == "completed":
-            st.success(f"✅ {dl_state.get('message', 'Model installed!')}")
-
-        neg_prompt = st.text_input(
-            "Negative Prompt",
-            value="blurry, deformed, low quality, artifacts, distorted, out of focus"
-        )
-
-        is_turbo_lab = "turbo" in selected_ckpt.lower()
-        col_steps, col_cfg, col_sampler = st.columns([1, 1, 1])
-        with col_steps:
-            steps = st.slider(
-                "Steps",
-                min_value=1 if is_turbo_lab else 12,
-                max_value=10 if is_turbo_lab else 30,
-                value=1 if is_turbo_lab else 15,
-                help="1-2 steps for SD-Turbo, 15+ steps for standard models" if is_turbo_lab else "15 steps with DPM++ 2M Karras produces sharp, crisp details"
-            )
-        with col_cfg:
-            cfg = st.slider(
-                "CFG Scale",
-                min_value=1.0,
-                max_value=3.0 if is_turbo_lab else 15.0,
-                value=1.0 if is_turbo_lab else 7.0,
-                step=0.5,
-                help="Low CFG (1.0-1.5) is essential for SD-Turbo" if is_turbo_lab else "Classifier-Free Guidance strength"
-            )
-        with col_sampler:
-            sampler_name = st.selectbox(
-                "Sampler",
-                ["euler", "dpmpp_2m", "euler_ancestral", "ddim"] if is_turbo_lab else ["dpmpp_2m", "euler_ancestral", "euler", "ddim"],
-                index=0,
-                help="Euler is recommended for SD-Turbo" if is_turbo_lab else "DPM++ 2M Karras is the industry gold standard for sharp photorealism"
-            )
-
-        generate_btn = st.button("🎨 Generate Image", type="primary", use_container_width=True)
-
-    with col_preview:
-        st.markdown("#### 🖼️ Render Preview")
-        preview_container = st.empty()
-
-        if generate_btn and img_prompt:
-            spin_msg = f"Synthesizing high-speed SD-Turbo diffusion ({detected_w}×{detected_h}, ~3-10s)..." if is_turbo_lab else f"Sampling latent diffusion model on CPU ({detected_w}×{detected_h}, typically ~60-120s)..."
-            with st.spinner(spin_msg):
-                req = ImageGenerateRequest(
-                    prompt=img_prompt,
-                    negative_prompt=neg_prompt,
-                    width=detected_w,
-                    height=detected_h,
-                    steps=steps,
-                    cfg_scale=cfg,
-                    checkpoint=selected_ckpt,
-                    sampler_name=sampler_name,
-                    scheduler="karras",
-                    style_preset=style_choice,
-                    enhance_prompt=enhance_toggle
-                )
-                res = run_async(comfyui_service.generate_image(req))
-
-            if res.status == "success" or res.status == "completed":
-                img_path = settings.generated_images_dir / res.image_filename if res.image_filename else None
-                if img_path and img_path.exists():
-                    st.image(str(img_path), caption=f"Resolution: {detected_w}×{detected_h} • Seed: {res.seed}", use_container_width=True)
-                    with open(img_path, "rb") as f:
-                        st.download_button("💾 Download Image", f, file_name=res.image_filename, mime="image/png", use_container_width=True)
-                else:
-                    st.success(f"Generated successfully: {res.image_url}")
-            else:
-                st.error(f"Image generation failed: {res.error}")
-
-    # Gallery Section
-    st.markdown("---")
-    col_g_title, col_g_btn = st.columns([4, 1])
-    with col_g_title:
-        st.markdown("#### 📸 Image Gallery")
-    with col_g_btn:
-        if st.button("🔄 Sync Output", key="sync_gallery_btn", help="Sync any offline or background ComfyUI renders"):
-            with st.spinner("Syncing local renders..."):
-                run_async(comfyui_service.sync_external_outputs())
-                st.rerun()
-
-    try:
-        run_async(comfyui_service.sync_external_outputs())
-    except Exception:
-        pass
-
-    history_rows = run_async(db.fetchall("SELECT * FROM image_history WHERE status IN ('success', 'completed') ORDER BY created_at DESC LIMIT 8"))
-    
-    if history_rows:
-        g_cols = st.columns(4)
-        for i, row in enumerate(history_rows):
-            fn = row["image_filename"]
-            local_p = settings.generated_images_dir / fn if fn else None
-            with g_cols[i % 4]:
-                if local_p and local_p.exists():
-                    try:
-                        st.image(str(local_p), caption=row["prompt"][:40] + "...", use_container_width=True)
-                    except Exception as img_err:
-                        st.caption(f"⚠️ Image preview unavailable ({fn})")
-    else:
-        st.info("No generated images saved yet. Click 'Generate Image' to render your first artwork!")
 
 
 # =========================================================
