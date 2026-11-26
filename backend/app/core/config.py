@@ -1,6 +1,6 @@
 import os
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 from pydantic import BaseModel, Field
 
 # Base directories
@@ -10,8 +10,10 @@ DATA_DIR = BASE_DIR / "data"
 WORKSPACE_DIR = BASE_DIR / "workspace"
 GENERATED_IMAGES_DIR = BASE_DIR / "generated_images"
 BACKUP_DIR = DATA_DIR / "backups"
+TIPS_RESOURCES_DIR = Path(os.getenv("TIPS_RESOURCES_DIR", str(BASE_DIR / "Tips & Resources")))
+KB_ASSETS_DIR = DATA_DIR / "kb_assets"
 
-for d in [DATA_DIR, WORKSPACE_DIR, GENERATED_IMAGES_DIR, BACKUP_DIR]:
+for d in [DATA_DIR, WORKSPACE_DIR, GENERATED_IMAGES_DIR, BACKUP_DIR, TIPS_RESOURCES_DIR, KB_ASSETS_DIR]:
     d.mkdir(parents=True, exist_ok=True)
 
 def get_user_workspace(username: Optional[str] = None) -> Path:
@@ -113,6 +115,8 @@ class Settings(BaseModel):
     workspace_root: Path = WORKSPACE_DIR.resolve()
     generated_images_dir: Path = GENERATED_IMAGES_DIR.resolve()
     backup_dir: Path = BACKUP_DIR.resolve()
+    tips_resources_dir: Path = TIPS_RESOURCES_DIR.resolve()
+    kb_assets_dir: Path = KB_ASSETS_DIR.resolve()
     
     # Limits & security
     max_attachment_size_bytes: int = 25 * 1024 * 1024 # 25MB

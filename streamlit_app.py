@@ -74,6 +74,8 @@ from app.services.document_service import process_uploaded_files, extract_file_d
 from app.services.model_download_service import model_download_manager, parse_model_names
 from app.services.model_recommendation_service import model_recommendation_service
 from app.services.account_service import account_service
+from app.services.audit_service import audit_service, estimate_tokens
+from app.services.lenovo_kb_service import lenovo_kb_service
 from app.core.load_balancer import load_balancer
 
 @st.cache_data(ttl=30)
@@ -1520,6 +1522,12 @@ def render_login_portal():
                     if authenticated:
                         st.session_state["authenticated_user"] = authenticated
                         st.session_state["session_id"] = load_balancer.register_session(authenticated["username"], authenticated["name"], authenticated["role"])
+                        audit_service.record_event(
+                            username=authenticated["username"],
+                            user_role=authenticated["role"],
+                            event_type="login",
+                            details="Streamlit portal sign in",
+                        )
                         tool_registry.set_active_workspace(authenticated["workspace_path"])
                         st.session_state.pop("active_conv_id", None)
                         st.session_state.pop("loaded_conv_id", None)
@@ -1566,6 +1574,17 @@ tool_registry.set_active_workspace(current_user["workspace_path"])
 user_role = str(current_user.get("role", "User"))
 is_admin = user_role.lower() == "admin"
 curr_uname = current_user.get("username", "")
+
+# Keep load_balancer session alive for active logged-in users
+_active_sess_id = st.session_state.get("session_id")
+if not _active_sess_id or not any(s.get("session_id") == _active_sess_id for s in load_balancer.get_active_sessions()):
+    st.session_state["session_id"] = load_balancer.register_session(
+        curr_uname or "user",
+        current_user.get("name", curr_uname or "User"),
+        user_role,
+    )
+else:
+    load_balancer.update_activity(_active_sess_id)
 
 # ---------------------------------------------------------
 # SIDEBAR NAVIGATION & INFERENCE CONTROLS
@@ -1625,6 +1644,12 @@ with st.sidebar:
             sess_id = st.session_state.get("session_id")
             if sess_id:
                 load_balancer.unregister_session(sess_id)
+            audit_service.record_event(
+                username=curr_uname or "user",
+                user_role=user_role,
+                event_type="logout",
+                details="Streamlit portal sign out",
+            )
             st.session_state["authenticated_user"] = None
             st.session_state["session_id"] = None
             st.session_state.pop("active_conv_id", None)
@@ -1634,15 +1659,17 @@ with st.sidebar:
             st.rerun()
 
     # Module Navigation
-    # Rule 1: Only Admin can access Account Management
+    # Rule 1: Only Admin can access Account Management & Usage Audit
     if is_admin:
-        default_nav = ["💬 Chat", "👥 Account Management", "⚙️ Settings"]
+        default_nav = ["💬 Chat", "📚 Lenovo Tips & Issues", "👥 Account Management", "📊 Audit & Analytics", "⚙️ Settings"]
     else:
-        default_nav = ["💬 Chat", "⚙️ Settings"]
+        default_nav = ["💬 Chat", "📚 Lenovo Tips & Issues", "⚙️ Settings"]
 
     ALL_MODULE_PAGES = [
         "💬 Chat",
+        "📚 Lenovo Tips & Issues",
         "👥 Account Management" if is_admin else None,
+        "📊 Audit & Analytics" if is_admin else None,
         "⚙️ Settings",
         "🧠 AI Tool Memory Hub",
         "💻 Autonomous Coding Agent",
@@ -1657,7 +1684,12 @@ with st.sidebar:
     page_idx = 0
     if req_page:
         for i, opt in enumerate(nav_options):
-            if req_page.lower() in opt.lower() or (req_page.lower() in ["more", "settings"] and "settings" in opt.lower()) or (req_page.lower() in ["chat", "studio"] and "chat" in opt.lower()):
+            if (
+                req_page.lower() in opt.lower()
+                or (req_page.lower() in ["kb", "tips", "lenovo"] and "lenovo" in opt.lower())
+                or (req_page.lower() in ["more", "settings"] and "settings" in opt.lower())
+                or (req_page.lower() in ["chat", "studio"] and "chat" in opt.lower())
+            ):
                 page_idx = i
                 break
 
@@ -2409,9 +2441,581 @@ st.markdown(brand_banner_html, unsafe_allow_html=True)
 
 # =========================================================
 
+def _format_compact_number(val: int) -> str:
+    if val >= 1_000_000:
+        return f"{val / 1_000_000:.1f}M"
+    if val >= 1_000:
+        return f"{val / 1_000:.1f}K"
+    return str(val)
+
+
+def render_admin_audit_dashboard(key_prefix: str = "audit", show_title: bool = True):
+    """
+    Admin-only Usage Audit & Analytics Dashboard.
+    Tracks active users, adoption, logins, feature/model utilization, latency, and audit events.
+    """
+    if current_user.get("role", "").lower() != "admin":
+        st.warning("⚠️ Access Restricted: Only Admin accounts can access Usage Audit & Analytics (Rule 1).")
+        st.stop()
+
+    import pandas as pd
+    import altair as alt
+
+    if show_title:
+        st.markdown("### 📊 Usage Audit & User Analytics Dashboard")
+        st.caption("Track application adoption, active users, feature usage, model distribution, latency, and security audit trail.")
+
+    # Top filter & export bar
+    ctl_col1, ctl_col2, ctl_col3 = st.columns([2.2, 1.0, 1.4])
+    window_map = {
+        "Last 24 Hours": 1,
+        "Last 7 Days": 7,
+        "Last 30 Days": 30,
+        "All Time": None,
+    }
+    with ctl_col1:
+        selected_window = st.selectbox(
+            "Audit Timeframe",
+            options=list(window_map.keys()),
+            index=2,
+            key=f"{key_prefix}_window_select",
+        )
+    with ctl_col2:
+        st.markdown("<div style='height: 27px;'></div>", unsafe_allow_html=True)
+        if st.button("🔄 Refresh", key=f"{key_prefix}_refresh_btn", use_container_width=True):
+            st.rerun()
+
+    users = account_service.get_all_users(include_passwords=False)
+    active_sess = load_balancer.get_active_sessions()
+    analytics = audit_service.get_dashboard_analytics(
+        days=window_map[selected_window],
+        users=users,
+        active_sessions=active_sess,
+        event_limit=200,
+    )
+    summary = analytics["summary"]
+    per_user = analytics["per_user_stats"]
+    daily_rows = analytics["daily_activity"]
+    feature_rows = analytics["feature_breakdown"]
+    model_rows = analytics["model_usage"]
+    recent_events = analytics["recent_events"]
+
+    with ctl_col3:
+        st.markdown("<div style='height: 27px;'></div>", unsafe_allow_html=True)
+        csv_bytes = audit_service.export_audit_csv(recent_events, per_user)
+        st.download_button(
+            label="📥 Export Audit CSV",
+            data=csv_bytes,
+            file_name=f"isotope_usage_audit_{datetime.datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+            mime="text/csv",
+            key=f"{key_prefix}_export_csv",
+            use_container_width=True,
+        )
+
+    # Row 1: User Adoption KPIs ("How many users are using this app?")
+    k1, k2, k3, k4 = st.columns(4)
+    with k1:
+        st.metric(
+            "Registered Accounts",
+            summary["registered_users_count"],
+            help="Total accounts configured in Account Management.xlsx",
+        )
+    with k2:
+        st.metric(
+            "Users Using App (All-Time)",
+            summary["lifetime_active_users"],
+            delta=f"{summary['adoption_rate_pct']}% adoption",
+            delta_color="off",
+            help="Unique users with recorded logins, prompts, or active sessions",
+        )
+    with k3:
+        st.metric(
+            f"Active Users ({selected_window})",
+            summary["active_users_in_period"],
+            help="Unique users active in the selected audit timeframe",
+        )
+    with k4:
+        st.metric(
+            "Currently Online",
+            summary["online_users_count"],
+            delta=f"{summary['active_sessions_count']} session(s)",
+            delta_color="off",
+        )
+
+    # Row 2: Activity & Performance KPIs
+    m1, m2, m3, m4 = st.columns(4)
+    with m1:
+        st.metric(
+            "Tracked Prompts & Actions",
+            summary["total_actions"],
+            delta=f"{summary['total_saved_conversations']} saved chats",
+            delta_color="off",
+        )
+    with m2:
+        st.metric("Sign-Ins (Window)", summary["total_logins"])
+    with m3:
+        st.metric("Estimated Tokens", _format_compact_number(summary["total_tokens_est"]))
+    with m4:
+        st.metric(
+            "Avg Response Latency",
+            f"{summary['avg_latency_ms']} ms" if summary["avg_latency_ms"] > 0 else "—",
+            delta=f"{summary['error_rate_pct']}% error rate",
+            delta_color="off",
+        )
+
+    st.markdown("---")
+
+    # Charts Row 1: Daily Trend + Usage by User
+    c_chart1, c_chart2 = st.columns(2)
+    with c_chart1:
+        st.markdown("##### 📈 Daily Activity & Active Users")
+        if daily_rows:
+            df_daily = pd.DataFrame(daily_rows)
+            chart_daily = (
+                alt.Chart(df_daily)
+                .mark_bar(cornerRadiusTopLeft=4, cornerRadiusTopRight=4, color="#00f2fe")
+                .encode(
+                    x=alt.X("Date:N", title="Date", axis=alt.Axis(labelColor="#94a3b8", titleColor="#cbd5e1")),
+                    y=alt.Y("Actions:Q", title="Prompts & Actions", axis=alt.Axis(labelColor="#94a3b8", titleColor="#cbd5e1", gridColor="rgba(56,189,248,0.12)")),
+                    tooltip=["Date:N", "Actions:Q", "Logins:Q", "Unique Users:Q", "Est. Tokens:Q"],
+                )
+                .properties(height=250)
+                .configure(background="transparent")
+                .configure_view(strokeWidth=0)
+            )
+            st.altair_chart(chart_daily, use_container_width=True)
+        else:
+            st.info("No usage activity recorded in this timeframe yet. Send a chat message or sign in to generate live trend data.")
+
+    with c_chart2:
+        st.markdown("##### 👤 Activity Volume by User")
+        df_users = pd.DataFrame(per_user)
+        if not df_users.empty:
+            df_users["Total Activity"] = df_users["Usage Actions"] + df_users["Logins"]
+            chart_users = (
+                alt.Chart(df_users)
+                .mark_bar(cornerRadiusTopRight=4, cornerRadiusBottomRight=4)
+                .encode(
+                    x=alt.X("Total Activity:Q", title="Total Interactions (Actions + Logins)", axis=alt.Axis(labelColor="#94a3b8", titleColor="#cbd5e1", gridColor="rgba(56,189,248,0.12)")),
+                    y=alt.Y("Username:N", sort="-x", title="User", axis=alt.Axis(labelColor="#e2e8f0", titleColor="#cbd5e1")),
+                    color=alt.Color("Status:N", scale=alt.Scale(
+                        domain=["🟢 Online", "🔵 Active User", "⚪ Unused"],
+                        range=["#10b981", "#38bdf8", "#475569"]
+                    ), legend=alt.Legend(orient="bottom", title=None, columns=3, labelColor="#cbd5e1")),
+                    tooltip=["Name:N", "Username:N", "Status:N", "Logins:Q", "Usage Actions:Q", "Prompts History:Q", "Est. Tokens:Q"],
+                )
+                .properties(height=250)
+                .configure(background="transparent")
+                .configure_view(strokeWidth=0)
+            )
+            st.altair_chart(chart_users, use_container_width=True)
+
+    # Charts Row 2: Feature Breakdown + Model Distribution
+    c_chart3, c_chart4 = st.columns(2)
+    with c_chart3:
+        st.markdown("##### 🧩 Feature & Command Breakdown")
+        if feature_rows:
+            df_feat = pd.DataFrame(feature_rows)
+            chart_feat = (
+                alt.Chart(df_feat)
+                .mark_bar(cornerRadiusTopRight=4, cornerRadiusBottomRight=4, color="#c084fc")
+                .encode(
+                    x=alt.X("Count:Q", title="Events", axis=alt.Axis(labelColor="#94a3b8", titleColor="#cbd5e1", gridColor="rgba(56,189,248,0.12)")),
+                    y=alt.Y("Feature:N", sort="-x", title="", axis=alt.Axis(labelColor="#e2e8f0")),
+                    tooltip=["Feature:N", "Count:Q"],
+                )
+                .properties(height=220)
+                .configure(background="transparent")
+                .configure_view(strokeWidth=0)
+            )
+            st.altair_chart(chart_feat, use_container_width=True)
+        else:
+            st.info("No feature events logged in this timeframe yet.")
+
+    with c_chart4:
+        st.markdown("##### 🤖 Model Usage Distribution")
+        if model_rows:
+            df_models = pd.DataFrame(model_rows)
+            chart_models = (
+                alt.Chart(df_models)
+                .mark_bar(cornerRadiusTopRight=4, cornerRadiusBottomRight=4, color="#38bdf8")
+                .encode(
+                    x=alt.X("Requests:Q", title="Requests / Chats", axis=alt.Axis(labelColor="#94a3b8", titleColor="#cbd5e1", gridColor="rgba(56,189,248,0.12)")),
+                    y=alt.Y("Model:N", sort="-x", title="", axis=alt.Axis(labelColor="#e2e8f0")),
+                    tooltip=["Model:N", "Requests:Q", "Est. Tokens:Q", "Avg Latency (ms):Q"],
+                )
+                .properties(height=220)
+                .configure(background="transparent")
+                .configure_view(strokeWidth=0)
+            )
+            st.altair_chart(chart_models, use_container_width=True)
+        else:
+            st.info("No model usage recorded yet.")
+
+    st.markdown("---")
+
+    # Per-User Adoption & Usage Audit Table
+    st.markdown("##### 👥 User Adoption & Usage Breakdown")
+    u_filter = st.radio(
+        "Filter Accounts",
+        options=["All Users", "Active / Using App", "Unused Accounts"],
+        horizontal=True,
+        key=f"{key_prefix}_user_filter",
+    )
+    filtered_user_rows = []
+    for u in per_user:
+        if u_filter == "Active / Using App" and not u["has_used"]:
+            continue
+        if u_filter == "Unused Accounts" and u["has_used"]:
+            continue
+        filtered_user_rows.append({
+            "Name": u["Name"],
+            "Username": u["Username"],
+            "Role": u["Role"],
+            "Status": u["Status"],
+            "Logins": u["Logins"],
+            "Tracked Actions": u["Usage Actions"],
+            "Saved Chats": u["Saved Chats"],
+            "Prompt History": u["Prompts History"],
+            "Est. Tokens": u["Est. Tokens"],
+            "Avg Latency (ms)": u["Avg Latency (ms)"],
+            "Errors": u["Errors"],
+            "Top Model": u["Top Model"],
+            "Last Active": u["Last Active"],
+        })
+    if filtered_user_rows:
+        st.dataframe(filtered_user_rows, use_container_width=True, hide_index=True)
+    else:
+        st.info("No accounts match the selected filter.")
+
+    # Recent Audit Trail
+    with st.expander("🧾 Detailed Audit Event Trail", expanded=False):
+        if recent_events:
+            fc1, fc2, fc3 = st.columns(3)
+            ev_users = sorted({str(e.get("username", "")) for e in recent_events if e.get("username")})
+            ev_types = sorted({str(e.get("event_type", "")) for e in recent_events if e.get("event_type")})
+            with fc1:
+                sel_u = st.selectbox("User", ["All"] + ev_users, key=f"{key_prefix}_log_user")
+            with fc2:
+                sel_t = st.selectbox("Event Type", ["All"] + ev_types, key=f"{key_prefix}_log_type")
+            with fc3:
+                sel_s = st.selectbox("Status", ["All", "success", "error"], key=f"{key_prefix}_log_status")
+
+            trail_rows = []
+            for ev in recent_events:
+                if sel_u != "All" and ev.get("username") != sel_u:
+                    continue
+                if sel_t != "All" and ev.get("event_type") != sel_t:
+                    continue
+                if sel_s != "All" and ev.get("status") != sel_s:
+                    continue
+                trail_rows.append({
+                    "Timestamp": str(ev.get("created_at", ""))[:19].replace("T", " "),
+                    "User": f"@{ev.get('username', '')}",
+                    "Role": ev.get("user_role", ""),
+                    "Event": ev.get("event_type", ""),
+                    "Model": ev.get("model_used") or "—",
+                    "Tokens": ev.get("tokens_est", 0),
+                    "Latency (ms)": ev.get("duration_ms", 0),
+                    "Status": ev.get("status", ""),
+                    "Details": ev.get("details", ""),
+                })
+            if trail_rows:
+                st.dataframe(trail_rows, use_container_width=True, hide_index=True)
+            else:
+                st.info("No audit events match the selected filters.")
+        else:
+            st.info("No detailed audit events recorded yet. Logins, chats, reports, coding runs, searches, and admin actions will appear here automatically.")
+
+
+def _collect_kb_assets(kb_matches: List[Dict[str, Any]], max_images: int = 3) -> List[Dict[str, str]]:
+    """Collects unique existing extracted SOP image files and data URIs attached to matched KB records."""
+    import base64
+    out: List[Dict[str, str]] = []
+    seen_paths: set = set()
+    for idx, item in enumerate(kb_matches, start=1):
+        for ast_item in item.get("assets", []) or []:
+            p = str(ast_item.get("path") or "").strip()
+            if p and p not in seen_paths and os.path.exists(p):
+                seen_paths.add(p)
+                fmt = str(ast_item.get("format") or "png").lower()
+                mime = "image/jpeg" if fmt in ("jpg", "jpeg") else f"image/{fmt}"
+                try:
+                    raw_b = Path(p).read_bytes()
+                    data_uri = f"data:{mime};base64,{base64.b64encode(raw_b).decode('utf-8')}"
+                except Exception:
+                    data_uri = ""
+                out.append({
+                    "path": p,
+                    "data_uri": data_uri,
+                    "caption": f"[KB-{idx}] {item.get('title', 'SOP Image')[:90]} ({item.get('source_file', '')})",
+                })
+                if len(out) >= max_images:
+                    return out
+    return out
+
+
+def _build_kb_citations_markdown(kb_matches: List[Dict[str, Any]], max_items: int = 6) -> str:
+    """Builds concise clickable citation footer referencing matched internal Lenovo resources."""
+    if not kb_matches:
+        return ""
+    c_lines = [f"\n\n---\n**📚 Lenovo Tips & Resources Citations ({min(len(kb_matches), max_items)} match(es)):**"]
+    for idx, item in enumerate(kb_matches[:max_items], start=1):
+        bits = [f"`{item.get('source_file', '')}`"]
+        if item.get("issue_code"):
+            bits.append(f"ID `{item['issue_code']}`")
+        if item.get("machine_types"):
+            bits.append(f"MT `{item['machine_types']}`")
+        if item.get("fru_parts"):
+            bits.append(f"FRU `{item['fru_parts']}`")
+        if item.get("pd_code"):
+            bits.append(f"PD `{item['pd_code']}`")
+        if item.get("confirmed_qi"):
+            bits.append(f"Confirmed QI: {item['confirmed_qi']}")
+        links = item.get("links") or []
+        link_md = ""
+        if links and links[0].get("url"):
+            link_md = f" — [Open Reference]({links[0]['url']})"
+        c_lines.append(f"- **[KB-{idx}]** {item.get('title', 'Tip')} ({' • '.join(bits)}){link_md}")
+    return "\n".join(c_lines)
+
+
+def _format_kb_offline_fallback(query: str, kb_matches: List[Dict[str, Any]]) -> str:
+    """Formats structured Lenovo KB troubleshooting cards when local LLM is offline or skipped."""
+    if not kb_matches:
+        return f"No matching records found in `Tips & Resources` for `{query}`."
+    lines = [f"### 📚 Lenovo Tips & Resources Matches for: `{query}`\n"]
+    for idx, item in enumerate(kb_matches[:6], start=1):
+        lines.append(f"#### [KB-{idx}] {item.get('title', 'Untitled')} ({item.get('source_label', '')})")
+        meta = []
+        if item.get("model_names"):
+            meta.append(f"**Models:** {item['model_names'][:180]}")
+        if item.get("machine_types"):
+            meta.append(f"**MT:** `{item['machine_types']}`")
+        if item.get("confirmed_qi"):
+            meta.append(f"**Confirmed QI:** {item['confirmed_qi']}")
+        if item.get("issue_status"):
+            meta.append(f"**Status:** {item['issue_status']}")
+        if meta:
+            lines.append(" • ".join(meta) + "\n")
+        if item.get("root_cause"):
+            lines.append(f"- **Root Cause:** {item['root_cause']}")
+        if item.get("resolution"):
+            lines.append(f"- **Resolution / Tip:** {item['resolution']}")
+        parts = [
+            f"`{lbl}: {item[k]}`"
+            for lbl, k in [("FRU", "fru_parts"), ("Buffer", "buffer_parts"), ("PD", "pd_code"), ("QDTS", "qdts_code")]
+            if item.get(k)
+        ]
+        if parts:
+            lines.append("- **Parts & Codes:** " + " • ".join(parts))
+        for lk in item.get("links") or []:
+            if lk.get("url"):
+                lines.append(f"- **Link:** [{lk.get('label', 'Reference Link')}]({lk['url']})")
+        lines.append(f"- **Source:** `{item.get('source_file', '')}` ({item.get('sheet_name', '')}, Row {item.get('row_number', '')})\n")
+    return "\n".join(lines)
+
+
+def render_lenovo_kb_explorer():
+    """Searchable Lenovo Tips & Resources Knowledge Base Explorer + Admin Folder Sync Controls."""
+    is_admin_user = current_user.get("role", "").lower() == "admin"
+    st.markdown("### 📚 Lenovo Tips & Resources Knowledge Base")
+    st.caption(
+        "Instant offline troubleshooting across Lenovo AP Known Issues, Known Tips, LEAP Tips, and Thursday Tech Tips. "
+        "Files in <code>Tips &amp; Resources</code> auto-sync whenever added or updated.",
+        unsafe_allow_html=True,
+    )
+
+    stats = lenovo_kb_service.get_stats()
+    k1, k2, k3, k4 = st.columns(4)
+    with k1:
+        st.metric("Indexed KB Records", f"{stats['total_entries']:,}", help="Deduplicated across all Tips & Resources workbooks and documents")
+    with k2:
+        st.metric("Confirmed QI Issues", f"{stats['confirmed_qi_count']:,}")
+    with k3:
+        st.metric("Source Files", len(stats["sources"]))
+    with k4:
+        last_sync_disp = (stats.get("last_synced_at") or "Not synced")[:16].replace("T", " ")
+        st.metric("Last Folder Sync", last_sync_disp)
+
+    st.markdown("<div style='height: 6px;'></div>", unsafe_allow_html=True)
+
+    # Search & Filters
+    kb_query = st.text_input(
+        "🔍 Search Lenovo Model, Machine Type (MT), FRU / PD / APTT Code, or Symptom",
+        placeholder="e.g. SLIM 3 15IAH8, 21CB, ThinkPad T14 Gen 6, POST 2100, bezel peel, 5B11Q02019, APTT0819...",
+        key="kb_explorer_query",
+    )
+    f1, f2, f3, f4 = st.columns([1.4, 1.3, 1.0, 0.9])
+    type_options = {
+        "all": "All Resource Types",
+        "known_issue": "🛠️ AP Known Issues",
+        "known_tip": "💡 Known Tips",
+        "leap_tip": "🚀 LEAP Tips",
+        "tech_tip": "📅 Thursday Tech Tips",
+        "document": "📄 Documents & PDFs",
+    }
+    with f1:
+        sel_type = st.selectbox(
+            "Source Category",
+            options=list(type_options.keys()),
+            format_func=lambda k: type_options[k],
+            key="kb_filter_type",
+        )
+    with f2:
+        seg_opts = ["all"] + stats.get("segments", [])
+        sel_seg = st.selectbox(
+            "Segment",
+            options=seg_opts,
+            format_func=lambda k: "All Segments" if k == "all" else k,
+            key="kb_filter_segment",
+        )
+    with f3:
+        confirmed_only = st.checkbox("Confirmed QI Only", value=False, key="kb_filter_qi")
+    with f4:
+        res_limit = st.selectbox("Max Results", options=[15, 30, 50, 100], index=0, key="kb_filter_limit")
+
+    matches = lenovo_kb_service.search(
+        query=kb_query,
+        limit=res_limit,
+        source_type=None if sel_type == "all" else sel_type,
+        segment=None if sel_seg == "all" else sel_seg,
+        confirmed_only=confirmed_only,
+    )
+
+    if kb_query.strip() and st.session_state.get("_last_logged_kb_q") != kb_query.strip():
+        st.session_state["_last_logged_kb_q"] = kb_query.strip()
+        audit_service.record_event(
+            username=curr_uname,
+            user_role=user_role,
+            event_type="tips",
+            details=f"KB Explorer query: {kb_query.strip()[:80]} ({len(matches)} hits)",
+        )
+
+    st.markdown(f"##### Showing **{len(matches)}** matching record(s)")
+    if not matches:
+        st.info("No matching Lenovo tips or known issues found for these filters. Try broadening your model name, MT code, or keyword.")
+    else:
+        for idx, item in enumerate(matches, start=1):
+            mt_badge = f" • MT: {item['machine_types'][:35]}" if item.get("machine_types") else ""
+            qi_badge = " • ✅ Confirmed QI" if (item.get("confirmed_qi") or "").strip().lower() == "yes" else ""
+            header_lbl = f"{idx}. [{item['source_label']}] {item.get('title', 'Untitled')[:110]}{mt_badge}{qi_badge}"
+            with st.expander(header_lbl, expanded=(bool(kb_query.strip()) and idx <= 2)):
+                c_m1, c_m2 = st.columns([2.2, 1.2])
+                with c_m1:
+                    if item.get("model_names"):
+                        st.markdown(f"**Product / Models:** {item['model_names']}")
+                    if item.get("symptoms") and item["symptoms"] != item.get("title"):
+                        st.markdown(f"**Issue / Symptoms:**\n{item['symptoms']}")
+                    if item.get("root_cause"):
+                        st.markdown(f"**Root Cause:** {item['root_cause']}")
+                    if item.get("resolution"):
+                        st.markdown(f"**Verified Resolution / Tip:**\n{item['resolution']}")
+                with c_m2:
+                    meta_lines = [
+                        f"**Source File(s):** {', '.join(item.get('source_files') or [item.get('source_file', '')])}",
+                    ]
+                    if item.get("issue_code"):
+                        meta_lines.append(f"**Issue / Tip Code:** `{item['issue_code']}`")
+                    if item.get("machine_types"):
+                        meta_lines.append(f"**Machine Types (MT):** `{item['machine_types']}`")
+                    if item.get("segment"):
+                        meta_lines.append(f"**Segment:** {item['segment']} ({item.get('vendor') or 'Lenovo'})")
+                    if item.get("impact"):
+                        meta_lines.append(f"**Impact:** {item['impact']}")
+                    if item.get("issue_status"):
+                        meta_lines.append(f"**Status / Quarter:** {item['issue_status']}")
+                    if item.get("record_date"):
+                        meta_lines.append(f"**Updated / Created:** {item['record_date']}")
+                    if item.get("fru_parts"):
+                        meta_lines.append(f"**ImpactFRU:** `{item['fru_parts']}`")
+                    if item.get("buffer_parts"):
+                        meta_lines.append(f"**Buffer Parts:** `{item['buffer_parts']}`")
+                    if item.get("pd_code"):
+                        meta_lines.append(f"**PD Code:** `{item['pd_code']}`")
+                    if item.get("qdts_code"):
+                        meta_lines.append(f"**QDTS#:** `{item['qdts_code']}`")
+                    if item.get("extra_notes"):
+                        meta_lines.append(f"**Notes:** {item['extra_notes']}")
+                    st.markdown("\n\n".join(meta_lines))
+
+                if item.get("links"):
+                    st.markdown("**Official Reference Links:**")
+                    for lk in item["links"]:
+                        if lk.get("url"):
+                            st.markdown(f"- [{lk.get('label', 'Open Document')}]({lk['url']})")
+
+                item_assets = [a for a in (item.get("assets") or []) if a.get("path") and os.path.exists(a["path"])]
+                if item_assets:
+                    st.markdown("**Attached Troubleshooting Visuals:**")
+                    img_cols = st.columns(min(len(item_assets), 3))
+                    for a_i, ast_obj in enumerate(item_assets):
+                        img_cols[a_i % len(img_cols)].image(
+                            ast_obj["path"],
+                            caption=f"Row {ast_obj.get('row', '')} ({ast_obj.get('format', 'img').upper()})",
+                            use_container_width=True,
+                        )
+
+    st.markdown("---")
+    with st.expander("📂 Tips & Resources Folder Status & Periodic Updates", expanded=False):
+        st.caption(f"Monitored Directory: `{stats['kb_dir']}`")
+        if stats["sources"]:
+            src_table = [
+                {
+                    "File Name": s["file_name"],
+                    "Size (KB)": round((s["file_size"] or 0) / 1024, 1),
+                    "Records Parsed": s["record_count"],
+                    "SOP Images": s["asset_count"],
+                    "Status": s["status"],
+                    "Last Synced": (s.get("last_synced_at") or "")[:19].replace("T", " "),
+                }
+                for s in stats["sources"]
+            ]
+            st.dataframe(src_table, use_container_width=True, hide_index=True)
+
+        if is_admin_user:
+            c_sync, c_up = st.columns([1.0, 2.0])
+            with c_sync:
+                if st.button("🔄 Force Re-Sync Folder Now", key="btn_force_kb_sync", use_container_width=True, type="primary"):
+                    sync_res = lenovo_kb_service.sync_knowledge_base(force=True)
+                    audit_service.record_event(
+                        username=curr_uname,
+                        user_role=user_role,
+                        event_type="tips",
+                        details=f"Admin manual KB sync: {sync_res.get('entries_count', 0)} records",
+                    )
+                    st.toast(f"Synced {sync_res.get('entries_count', 0)} KB records from {sync_res.get('sources_count', 0)} files!", icon="📚")
+                    st.rerun()
+            with c_up:
+                up_kb_files = st.file_uploader(
+                    "Admin Upload: Add or Replace Resource (.xlsx, .csv, .pdf, .docx, .md, .txt)",
+                    accept_multiple_files=True,
+                    key="kb_admin_resource_uploader",
+                )
+                if up_kb_files and st.button("📥 Save & Index Uploaded Resource(s)", key="btn_kb_upload_save"):
+                    saved_names = []
+                    for uf in up_kb_files:
+                        try:
+                            up_res = lenovo_kb_service.save_uploaded_resource(uf.name, uf.getvalue())
+                            saved_names.append(up_res["saved_file"])
+                        except Exception as up_err:
+                            st.error(f"Failed saving {uf.name}: {up_err}")
+                    if saved_names:
+                        audit_service.record_event(
+                            username=curr_uname,
+                            user_role=user_role,
+                            event_type="tips",
+                            details=f"Admin uploaded KB file(s): {', '.join(saved_names)}",
+                        )
+                        st.success(f"Uploaded & indexed: {', '.join(saved_names)}")
+                        st.rerun()
+        else:
+            st.info("Folder re-sync and resource uploads are restricted to Admin accounts. Files updated inside `Tips & Resources` are indexed automatically.")
+
+
 def render_account_management_section():
     """
-    Dedicated Account Management & Multi-User Load Balancer Studio.
+    Dedicated Account Management, Usage Audit & Multi-User Load Balancer Studio.
     Implements enterprise governance backed directly by Account Management.xlsx.
     """
     if current_user.get("role", "").lower() != "admin":
@@ -2419,7 +3023,7 @@ def render_account_management_section():
         st.stop()
 
     st.markdown("### 👥 Account Management & Load Balancer Hub")
-    st.caption("Live user administration backed directly by <code>Account Management.xlsx</code> with real-time multi-user load balancing.", unsafe_allow_html=True)
+    st.caption("Live user administration backed directly by <code>Account Management.xlsx</code>, usage audit analytics, and multi-user load balancing.", unsafe_allow_html=True)
 
     users = account_service.get_all_users(include_passwords=True)
     stats = load_balancer.get_stats()
@@ -2437,8 +3041,9 @@ def render_account_management_section():
 
     st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
 
-    tab_users, tab_lb, tab_rules = st.tabs([
+    tab_users, tab_audit, tab_lb, tab_rules = st.tabs([
         "👥 User Accounts (Excel DB)",
+        "📊 Usage Audit & Analytics",
         "⚡ Multi-User Load Balancer",
         "📜 System Rules & Governance"
     ])
@@ -2482,6 +3087,12 @@ def render_account_management_section():
                                     role=new_role,
                                     actor_role=current_user.get("role", "User")
                                 )
+                                audit_service.record_event(
+                                    username=curr_uname or "admin",
+                                    user_role=user_role,
+                                    event_type="admin_user_add",
+                                    details=f"Added user @{res['username']} ({res['role']})",
+                                )
                                 st.success(f"User @{res['username']} created successfully! Isolated workspace provisioned at '{res['workspace_path']}'.")
                                 time.sleep(0.5)
                                 st.rerun()
@@ -2501,11 +3112,20 @@ def render_account_management_section():
                                 username=target_to_remove,
                                 actor_role=current_user.get("role", "User")
                             )
+                            audit_service.record_event(
+                                username=curr_uname or "admin",
+                                user_role=user_role,
+                                event_type="admin_user_remove",
+                                details=f"Removed user @{target_to_remove}",
+                            )
                             st.success(f"User @{target_to_remove} successfully removed from Account Management.xlsx.")
                             time.sleep(0.5)
                             st.rerun()
                         except Exception as ex:
                             st.error(f"Error removing user: {ex}")
+
+    with tab_audit:
+        render_admin_audit_dashboard(key_prefix="acct_audit", show_title=False)
 
     with tab_lb:
         st.markdown("#### ⚡ Real-Time Multi-User Load Balancer")
@@ -2701,7 +3321,7 @@ if selected_page in ["💬 Chat", "💬 All-in-One Studio", "Chat", "All-in-One 
         )
 
     # Quick Command Chips Bar
-    col_cmd_left, col_cmd_right = st.columns([2.5, 7.5])
+    col_cmd_left, col_cmd_right = st.columns([2.0, 8.0])
     with col_cmd_left:
         st.markdown(
             f'<div style="padding-top: 5px;">'
@@ -2710,7 +3330,11 @@ if selected_page in ["💬 Chat", "💬 All-in-One Studio", "Chat", "All-in-One 
             unsafe_allow_html=True
         )
     with col_cmd_right:
-        col_c1, col_c2, col_c3, col_c4 = st.columns(4)
+        col_c0, col_c1, col_c2, col_c3, col_c4 = st.columns(5)
+        with col_c0:
+            if st.button("📚 /tips", key="chip_tips", help="Search Lenovo Tips & Known Issues Knowledge Base", use_container_width=True):
+                st.session_state.prompt_input = "/tips ThinkPad T14 Gen 6 auto restart issue"
+                st.rerun()
         with col_c1:
             if st.button("💻 /code", key="chip_code", help="Autonomous Coding Agent: file inspection, diffs & pytest", use_container_width=True):
                 st.session_state.prompt_input = "/code review workspace files and run pytest suite"
@@ -2731,7 +3355,7 @@ if selected_page in ["💬 Chat", "💬 All-in-One Studio", "Chat", "All-in-One 
     # Chat Input Box (Native paperclip support for uploading up to 5 files)
     default_prompt = st.session_state.pop("prompt_input", "")
     chat_submission = st.chat_input(
-        "Ask anything, attach up to 5 files (PDF, Word, Code, Images), or use /search, /report, /code, /pull...",
+        "Ask anything, query Lenovo models/issues (/tips), attach up to 5 files, or use /search, /report, /code, /pull...",
         accept_file="multiple",
         key="main_chat_input"
     )
@@ -2811,6 +3435,7 @@ if selected_page in ["💬 Chat", "💬 All-in-One Studio", "Chat", "All-in-One 
             st.markdown(final_user_content, unsafe_allow_html=True)
 
         # Assistant processing
+        t_action_start = time.perf_counter()
         with st.chat_message("assistant"):
             # Notice if user types deprecated /image command
             if prompt_to_use.strip().startswith("/image"):
@@ -2827,7 +3452,7 @@ if selected_page in ["💬 Chat", "💬 All-in-One Studio", "Chat", "All-in-One 
             if prompt_to_use.strip().startswith("/image"):
                 pass
 
-            elif is_rep:
+            elif is_rep and not prompt_to_use.strip().lower().startswith(("/tips", "/kb", "!tips", "!kb")):
                 status_box = st.empty()
                 status_box.markdown(
                     render_thinking_badge("analysing", f"Evaluating technical architecture and diagnostics for '{report_title}'..."),
@@ -2864,12 +3489,32 @@ if selected_page in ["💬 Chat", "💬 All-in-One Studio", "Chat", "All-in-One 
                     render_executive_report_view(rep_text, default_title=report_title, key_prefix="live_rep")
                     save_chat_message(st.session_state["active_conv_id"], "assistant", rep_text)
                     st.session_state.messages.append({"role": "assistant", "content": rep_text})
+                    audit_service.record_event(
+                        username=curr_uname,
+                        user_role=user_role,
+                        event_type="report",
+                        model_used=selected_model,
+                        conversation_id=st.session_state["active_conv_id"],
+                        tokens_est=estimate_tokens(prompt_to_use) + estimate_tokens(rep_text),
+                        duration_ms=int((time.perf_counter() - t_action_start) * 1000),
+                        details=f"Report: {report_title[:80]}",
+                    )
                 except Exception as e:
                     status_box.empty()
                     err_msg = f"⚠️ Could not generate report with `{selected_model}`: {str(e)}"
                     st.error(err_msg)
                     save_chat_message(st.session_state["active_conv_id"], "assistant", err_msg)
                     st.session_state.messages.append({"role": "assistant", "content": err_msg})
+                    audit_service.record_event(
+                        username=curr_uname,
+                        user_role=user_role,
+                        event_type="report",
+                        model_used=selected_model,
+                        conversation_id=st.session_state["active_conv_id"],
+                        duration_ms=int((time.perf_counter() - t_action_start) * 1000),
+                        status="error",
+                        details=str(e)[:180],
+                    )
 
             # Check for inline /code command
             elif prompt_to_use.strip().startswith("/code "):
@@ -2907,6 +3552,16 @@ if selected_page in ["💬 Chat", "💬 All-in-One Studio", "Chat", "All-in-One 
                 st.markdown(out)
                 save_chat_message(st.session_state["active_conv_id"], "assistant", out)
                 st.session_state.messages.append({"role": "assistant", "content": out})
+                audit_service.record_event(
+                    username=curr_uname,
+                    user_role=user_role,
+                    event_type="code",
+                    model_used=selected_model,
+                    conversation_id=st.session_state["active_conv_id"],
+                    tokens_est=estimate_tokens(prompt_to_use) + estimate_tokens(plan_response),
+                    duration_ms=int((time.perf_counter() - t_action_start) * 1000),
+                    details=f"Inline /code: {code_task[:80]}",
+                )
 
             # Check for inline /pull or /install command
             elif prompt_to_use.strip().startswith(("/pull ", "/install ")):
@@ -2928,6 +3583,14 @@ if selected_page in ["💬 Chat", "💬 All-in-One Studio", "Chat", "All-in-One 
                     st.markdown(out_msg)
                     save_chat_message(st.session_state["active_conv_id"], "assistant", out_msg)
                     st.session_state.messages.append({"role": "assistant", "content": out_msg})
+                    audit_service.record_event(
+                        username=curr_uname,
+                        user_role=user_role,
+                        event_type="pull",
+                        model_used=", ".join(parsed_pulls),
+                        conversation_id=st.session_state["active_conv_id"],
+                        details=f"Multi-model pull ({len(parsed_pulls)})",
+                    )
                 else:
                     pull_target = parsed_pulls[0]
                     status_box = st.empty()
@@ -3001,12 +3664,31 @@ if selected_page in ["💬 Chat", "💬 All-in-One Studio", "Chat", "All-in-One 
                         out_msg = f"### 📦 Model Download\n\n{final_html}\n\nModel `{pull_target}` is now installed and ready for inference."
                         save_chat_message(st.session_state["active_conv_id"], "assistant", out_msg)
                         st.session_state.messages.append({"role": "assistant", "content": out_msg})
+                        audit_service.record_event(
+                            username=curr_uname,
+                            user_role=user_role,
+                            event_type="pull",
+                            model_used=pull_target,
+                            conversation_id=st.session_state["active_conv_id"],
+                            duration_ms=int((time.perf_counter() - t_action_start) * 1000),
+                            details=f"Pulled model {pull_target}",
+                        )
                     except Exception as e:
                         status_box.empty()
                         err_msg = f"❌ Failed to download model `{pull_target}`: {e}"
                         st.error(err_msg)
                         save_chat_message(st.session_state["active_conv_id"], "assistant", err_msg)
                         st.session_state.messages.append({"role": "assistant", "content": err_msg})
+                        audit_service.record_event(
+                            username=curr_uname,
+                            user_role=user_role,
+                            event_type="pull",
+                            model_used=pull_target,
+                            conversation_id=st.session_state["active_conv_id"],
+                            duration_ms=int((time.perf_counter() - t_action_start) * 1000),
+                            status="error",
+                            details=str(e)[:180],
+                        )
 
             # Standard Chat Inference
             else:
@@ -3024,16 +3706,43 @@ if selected_page in ["💬 Chat", "💬 All-in-One Studio", "Chat", "All-in-One 
                 if memory_lines:
                     effective_system += "\n\n### Active Long-Term Memories & AI Tool Guidelines:\n" + "\n".join(memory_lines)
 
+                clean_prompt = prompt_to_use.strip()
+                explicit_kb = clean_prompt.lower().startswith(("/tips ", "/kb ", "!tips ", "!kb "))
+                kb_query_target = clean_prompt.split(maxsplit=1)[1].strip() if explicit_kb else clean_prompt
+                kb_matches = []
+                kb_citations_md = ""
+                kb_matched_assets = []
+
+                response_placeholder = st.empty()
+
+                # Internal Lenovo Tips & Resources Knowledge Base Lookup (runs locally before external web search)
+                if explicit_kb or lenovo_kb_service.detect_lenovo_intent(kb_query_target):
+                    response_placeholder.markdown(
+                        render_thinking_badge("analysing", f"Searching Lenovo Tips & Resources KB for '{kb_query_target[:42]}' ..."),
+                        unsafe_allow_html=True,
+                    )
+                    try:
+                        kb_matches = lenovo_kb_service.search(
+                            kb_query_target,
+                            limit=6,
+                            min_score=10.0 if explicit_kb else 30.0,
+                        )
+                        if kb_matches:
+                            kb_ctx_str = lenovo_kb_service.format_context_for_llm(kb_query_target, kb_matches)
+                            effective_system += f"\n\n---\n{kb_ctx_str}"
+                            kb_citations_md = _build_kb_citations_markdown(kb_matches)
+                            kb_matched_assets = _collect_kb_assets(kb_matches)
+                    except Exception:
+                        kb_matches = []
+
                 # Check for live web search intent or explicit /search command
                 search_query_target = None
-                clean_prompt = prompt_to_use.strip()
                 if clean_prompt.startswith(("/search ", "!search ", "/web ")):
                     search_query_target = clean_prompt.split(maxsplit=1)[1].strip()
-                elif st.session_state.get("enable_web_search_val", True):
+                elif not explicit_kb and st.session_state.get("enable_web_search_val", True):
                     search_query_target = web_search_service.detect_search_intent(clean_prompt)
 
                 search_citations_md = ""
-                response_placeholder = st.empty()
 
                 if search_query_target:
                     response_placeholder.markdown(
@@ -3191,8 +3900,13 @@ if selected_page in ["💬 Chat", "💬 All-in-One Studio", "Chat", "All-in-One 
                     if not full_response:
                         full_response = "⚠️ The inference completed without generating content. Please retry or adjust model parameters."
 
+                    if kb_citations_md and kb_citations_md not in full_response:
+                        full_response += kb_citations_md
+
                     if search_citations_md and search_citations_md not in full_response:
                         full_response += search_citations_md
+
+                    assistant_images = [a["data_uri"] for a in kb_matched_assets if a.get("data_uri")]
 
                     if is_report_content(full_response):
                         response_placeholder.empty()
@@ -3200,37 +3914,96 @@ if selected_page in ["💬 Chat", "💬 All-in-One Studio", "Chat", "All-in-One 
                     else:
                         response_placeholder.markdown(full_response)
 
-                    save_chat_message(st.session_state["active_conv_id"], "assistant", full_response)
-                    st.session_state.messages.append({"role": "assistant", "content": full_response})
+                    if assistant_images:
+                        cols_kb_img = st.columns(min(len(assistant_images), 3))
+                        for k_i, k_uri in enumerate(assistant_images):
+                            cols_kb_img[k_i % len(cols_kb_img)].image(k_uri, caption=kb_matched_assets[k_i]["caption"], use_container_width=True)
+
+                    save_chat_message(st.session_state["active_conv_id"], "assistant", full_response, assistant_images)
+                    st.session_state.messages.append({"role": "assistant", "content": full_response, "images": assistant_images})
+                    _ev_kind = "search" if search_query_target else ("tips" if (explicit_kb or kb_matches) else "chat")
+                    _ev_detail = (
+                        f"Web search: {search_query_target[:60]}"
+                        if search_query_target
+                        else (
+                            f"Lenovo KB ({len(kb_matches)} matches): {kb_query_target[:50]}"
+                            if (explicit_kb or kb_matches)
+                            else (f"{len(incoming_files)} attachment(s)" if incoming_files else "Chat completion")
+                        )
+                    )
+                    audit_service.record_event(
+                        username=curr_uname,
+                        user_role=user_role,
+                        event_type=_ev_kind,
+                        model_used=selected_model,
+                        conversation_id=st.session_state["active_conv_id"],
+                        tokens_est=estimate_tokens(prompt_to_use) + estimate_tokens("".join(thinking_parts)) + estimate_tokens(full_response),
+                        duration_ms=int((time.perf_counter() - t_action_start) * 1000),
+                        details=_ev_detail,
+                    )
 
                 except Exception as e:
                     err_msg = str(e).strip()
-                    if not err_msg:
-                        err_name = type(e).__name__
-                        if "Timeout" in err_name:
-                            err_msg = "Model inference timed out while loading or generating tokens. Please select a lighter model (e.g. gemma4:12b or llama3.2) or decrease Context Length in Settings."
-                        else:
-                            err_msg = f"{err_name}: Unexpected connection drop from local Ollama engine."
-
-                    if any(term in err_msg for term in ["0xc0000409", "CUDA error", "shared object initialization", "buffer in this application"]):
-                        err_text = (
-                            f"⚠️ **GPU Memory Overrun / CUDA Crash**: Model `{selected_model}` is too large to fit entirely in available VRAM, causing a split GPU/CPU memory crash.\n\n"
-                            f"**Recommended Solutions:**\n"
-                            f"- **Select a lighter model**: Switch to `gemma4:12b` or `llama3.2` using the model switcher above or in the Settings tab.\n"
-                            f"- **Reduce Context Length**: Set **Context Length** in the Settings tab to `2048` or `4096` tokens.\n"
-                            f"- **Safe Flash Attention**: Ollama has been reconfigured with `OLLAMA_FLASH_ATTENTION=false` to prevent CUDA memory crashes."
+                    if kb_matches and (explicit_kb or lenovo_kb_service.detect_lenovo_intent(kb_query_target)):
+                        fallback_md = _format_kb_offline_fallback(kb_query_target, kb_matches)
+                        fallback_md += f"\n\n> ℹ️ *Displayed verified offline records directly from `Tips & Resources` (Local LLM unavailable: {err_msg[:120] or type(e).__name__}).*"
+                        assistant_images = [a["data_uri"] for a in kb_matched_assets if a.get("data_uri")]
+                        response_placeholder.markdown(fallback_md)
+                        save_chat_message(st.session_state["active_conv_id"], "assistant", fallback_md, assistant_images)
+                        st.session_state.messages.append({"role": "assistant", "content": fallback_md, "images": assistant_images})
+                        audit_service.record_event(
+                            username=curr_uname,
+                            user_role=user_role,
+                            event_type="tips",
+                            model_used="offline-kb",
+                            conversation_id=st.session_state["active_conv_id"],
+                            tokens_est=estimate_tokens(prompt_to_use) + estimate_tokens(fallback_md),
+                            duration_ms=int((time.perf_counter() - t_action_start) * 1000),
+                            details=f"Offline KB fallback ({len(kb_matches)} matches)",
                         )
                     else:
-                        err_text = f"⚠️ Inference failed: {err_msg}\n\nEnsure Ollama is running on http://127.0.0.1:11434 with model `{selected_model}` installed."
-                    response_placeholder.error(err_text)
-                    save_chat_message(st.session_state["active_conv_id"], "assistant", err_text)
-                    st.session_state.messages.append({"role": "assistant", "content": err_text})
+                        if not err_msg:
+                            err_name = type(e).__name__
+                            if "Timeout" in err_name:
+                                err_msg = "Model inference timed out while loading or generating tokens. Please select a lighter model (e.g. gemma4:12b or llama3.2) or decrease Context Length in Settings."
+                            else:
+                                err_msg = f"{err_name}: Unexpected connection drop from local Ollama engine."
+
+                        if any(term in err_msg for term in ["0xc0000409", "CUDA error", "shared object initialization", "buffer in this application"]):
+                            err_text = (
+                                f"⚠️ **GPU Memory Overrun / CUDA Crash**: Model `{selected_model}` is too large to fit entirely in available VRAM, causing a split GPU/CPU memory crash.\n\n"
+                                f"**Recommended Solutions:**\n"
+                                f"- **Select a lighter model**: Switch to `gemma4:12b` or `llama3.2` using the model switcher above or in the Settings tab.\n"
+                                f"- **Reduce Context Length**: Set **Context Length** in the Settings tab to `2048` or `4096` tokens.\n"
+                                f"- **Safe Flash Attention**: Ollama has been reconfigured with `OLLAMA_FLASH_ATTENTION=false` to prevent CUDA memory crashes."
+                            )
+                        else:
+                            err_text = f"⚠️ Inference failed: {err_msg}\n\nEnsure Ollama is running on http://127.0.0.1:11434 with model `{selected_model}` installed."
+                        response_placeholder.error(err_text)
+                        save_chat_message(st.session_state["active_conv_id"], "assistant", err_text)
+                        st.session_state.messages.append({"role": "assistant", "content": err_text})
+                        audit_service.record_event(
+                            username=curr_uname,
+                            user_role=user_role,
+                            event_type="search" if search_query_target else ("tips" if explicit_kb else "chat"),
+                            model_used=selected_model,
+                            conversation_id=st.session_state["active_conv_id"],
+                            duration_ms=int((time.perf_counter() - t_action_start) * 1000),
+                            status="error",
+                            details=err_msg[:180],
+                        )
 
         st.rerun()
 
 
+elif selected_page == "📚 Lenovo Tips & Issues":
+    render_lenovo_kb_explorer()
+
 elif selected_page == "👥 Account Management":
     render_account_management_section()
+
+elif selected_page == "📊 Audit & Analytics":
+    render_admin_audit_dashboard(key_prefix="nav_audit", show_title=True)
 
 # =========================================================
 # TAB: SETTINGS & WORKSPACE CONFIGURATION
@@ -3489,6 +4262,7 @@ elif selected_page == "💻 Autonomous Coding Agent":
         propose_btn = st.button("🚀 Propose Diff", type="primary", use_container_width=True)
 
         if propose_btn and agent_instruction:
+            t_code_start = time.perf_counter()
             status_box = st.empty()
             status_box.markdown(
                 render_thinking_badge("analysing", "Analysing codebase & workspace files..."),
@@ -3512,6 +4286,15 @@ elif selected_page == "💻 Autonomous Coding Agent":
             run_async(stream_diff())
             diff_content = "".join(diff_parts) if diff_parts else "No changes proposed."
             run_async(coding_agent_service.submit_plan_and_diff(task.id, "Plan generated", ["workspace"], diff_content))
+            audit_service.record_event(
+                username=curr_uname,
+                user_role=user_role,
+                event_type="code",
+                model_used=selected_model,
+                tokens_est=estimate_tokens(agent_instruction) + estimate_tokens(diff_content),
+                duration_ms=int((time.perf_counter() - t_code_start) * 1000),
+                details=f"Agent diff: {agent_instruction[:60]}",
+            )
             status_box.empty()
             st.markdown(f"**Task ID:** `{task.id[:8]}`")
             st.markdown("**Proposed Changes:**")
@@ -3569,6 +4352,7 @@ elif selected_page == "👁️ Vision Multimodal":
 
         if analyze_btn and vision_file:
             import base64
+            t_vis_start = time.perf_counter()
             b64_img = base64.b64encode(vision_file.getvalue()).decode("utf-8")
             status_box = st.empty()
             status_box.markdown(
@@ -3585,9 +4369,27 @@ elif selected_page == "👁️ Vision Multimodal":
                 st.markdown("### 📋 Analysis Result")
                 rep_text = getattr(res, "response", None) or (res.get("response") if isinstance(res, dict) else str(res))
                 st.markdown(rep_text)
+                audit_service.record_event(
+                    username=curr_uname,
+                    user_role=user_role,
+                    event_type="vision",
+                    model_used=selected_model,
+                    tokens_est=estimate_tokens(v_query) + estimate_tokens(rep_text),
+                    duration_ms=int((time.perf_counter() - t_vis_start) * 1000),
+                    details=f"Vision analysis ({vision_file.name})",
+                )
             except Exception as e:
                 status_box.empty()
                 st.error(f"Vision analysis error: {e}")
+                audit_service.record_event(
+                    username=curr_uname,
+                    user_role=user_role,
+                    event_type="vision",
+                    model_used=selected_model,
+                    duration_ms=int((time.perf_counter() - t_vis_start) * 1000),
+                    status="error",
+                    details=str(e)[:180],
+                )
 
 
 

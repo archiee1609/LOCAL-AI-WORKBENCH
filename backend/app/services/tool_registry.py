@@ -15,6 +15,7 @@ from app.core.command_runner import run_command_safely
 from app.database.connection import db
 from app.schemas.tools import ToolDefinition, ToolExecutionResponse
 from app.services.web_search_service import web_search_service
+from app.services.lenovo_kb_service import lenovo_kb_service
 
 # Safe AST evaluator for math
 SAFE_OPERATORS = {
@@ -385,6 +386,30 @@ class ToolRegistry:
             self._handle_fetch_web_page
         )
 
+        # 12. Lenovo Tips & Resources Knowledge Base Search
+        self.register_tool(
+            ToolDefinition(
+                name="search_lenovo_kb",
+                description=(
+                    "Searches the internal Lenovo 'Tips & Resources' knowledge base "
+                    "(AP Known Issues, Known Tips, LEAP Tips, and Thursday Tech Tips) by model name, "
+                    "4-character Machine Type (MT), FRU/PD/APTT code, or hardware/driver symptom."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "Model name, MT code, part/FRU, or symptom keywords"},
+                        "limit": {"type": "integer", "description": "Maximum number of KB matches to return (default 6, max 15)"},
+                        "confirmed_only": {"type": "boolean", "description": "Set true to only match Confirmed QI issues"},
+                    },
+                    "required": ["query"],
+                },
+                category="knowledge_base",
+                is_external=False,
+            ),
+            self._handle_search_lenovo_kb,
+        )
+
     # Handlers
     async def _handle_calculator(self, args: Dict[str, Any]) -> Dict[str, Any]:
         expr = args.get("expression", "")
@@ -516,5 +541,17 @@ class ToolRegistry:
     async def _handle_fetch_web_page(self, args: Dict[str, Any]) -> Dict[str, Any]:
         url = str(args.get("url", "")).strip()
         return await web_search_service.fetch_page(url)
+
+    async def _handle_search_lenovo_kb(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        query = str(args.get("query", "")).strip()
+        limit = min(max(int(args.get("limit", 6)), 1), 15)
+        confirmed_only = bool(args.get("confirmed_only", False))
+        matches = lenovo_kb_service.search(query=query, limit=limit, confirmed_only=confirmed_only)
+        return {
+            "query": query,
+            "total_matches": len(matches),
+            "results": matches,
+            "formatted_context": lenovo_kb_service.format_context_for_llm(query, matches, max_items=limit),
+        }
 
 tool_registry = ToolRegistry()

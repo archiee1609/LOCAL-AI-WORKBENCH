@@ -126,10 +126,94 @@ CREATE TABLE IF NOT EXISTS user_memories (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS usage_audit_log (
+    id TEXT PRIMARY KEY,
+    username TEXT NOT NULL,
+    user_role TEXT DEFAULT 'User',
+    event_type TEXT NOT NULL,
+    model_used TEXT DEFAULT '',
+    conversation_id TEXT DEFAULT '',
+    tokens_est INTEGER DEFAULT 0,
+    duration_ms INTEGER DEFAULT 0,
+    status TEXT DEFAULT 'success',
+    details TEXT DEFAULT '',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS kb_sources (
+    file_name TEXT PRIMARY KEY,
+    file_path TEXT NOT NULL,
+    sha256 TEXT NOT NULL,
+    file_size INTEGER DEFAULT 0,
+    mtime REAL DEFAULT 0.0,
+    record_count INTEGER DEFAULT 0,
+    asset_count INTEGER DEFAULT 0,
+    status TEXT DEFAULT 'indexed',
+    error_msg TEXT DEFAULT '',
+    last_synced_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS kb_entries (
+    id TEXT PRIMARY KEY,
+    canonical_key TEXT NOT NULL,
+    source_file TEXT NOT NULL,
+    source_files_json TEXT DEFAULT '[]',
+    sheet_name TEXT DEFAULT '',
+    row_number INTEGER DEFAULT 0,
+    source_type TEXT DEFAULT 'known_tip',
+    issue_code TEXT DEFAULT '',
+    model_names TEXT DEFAULT '',
+    machine_types TEXT DEFAULT '',
+    segment TEXT DEFAULT '',
+    vendor TEXT DEFAULT '',
+    commodity TEXT DEFAULT '',
+    fru_parts TEXT DEFAULT '',
+    buffer_parts TEXT DEFAULT '',
+    pd_code TEXT DEFAULT '',
+    qdts_code TEXT DEFAULT '',
+    critsit TEXT DEFAULT '',
+    applicable_market TEXT DEFAULT '',
+    confirmed_qi TEXT DEFAULT '',
+    issue_status TEXT DEFAULT '',
+    impact TEXT DEFAULT '',
+    title TEXT DEFAULT '',
+    symptoms TEXT DEFAULT '',
+    root_cause TEXT DEFAULT '',
+    resolution TEXT DEFAULT '',
+    extra_notes TEXT DEFAULT '',
+    links_json TEXT DEFAULT '[]',
+    assets_json TEXT DEFAULT '[]',
+    record_date TEXT DEFAULT '',
+    quarter TEXT DEFAULT '',
+    search_blob TEXT DEFAULT '',
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS kb_entries_fts USING fts5(
+    entry_id UNINDEXED,
+    title,
+    model_names,
+    machine_types,
+    symptoms,
+    root_cause,
+    resolution,
+    fru_parts,
+    codes,
+    search_blob,
+    tokenize='porter unicode61'
+);
+
 CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id);
 CREATE INDEX IF NOT EXISTS idx_tools_log_conversation ON tools_log(conversation_id);
 CREATE INDEX IF NOT EXISTS idx_workflow_runs_workflow ON workflow_runs(workflow_id);
 CREATE INDEX IF NOT EXISTS idx_conversations_updated ON conversations(updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_usage_audit_user ON usage_audit_log(username);
+CREATE INDEX IF NOT EXISTS idx_usage_audit_created ON usage_audit_log(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_usage_audit_event ON usage_audit_log(event_type);
+CREATE INDEX IF NOT EXISTS idx_kb_entries_canonical ON kb_entries(canonical_key);
+CREATE INDEX IF NOT EXISTS idx_kb_entries_source_file ON kb_entries(source_file);
+CREATE INDEX IF NOT EXISTS idx_kb_entries_type ON kb_entries(source_type);
+CREATE INDEX IF NOT EXISTS idx_kb_entries_qi ON kb_entries(confirmed_qi);
 """
 
 async def run_migrations() -> None:

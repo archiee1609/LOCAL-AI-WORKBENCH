@@ -12,6 +12,7 @@ from app.database.connection import db
 from app.services.ollama_service import ollama_service
 from app.services.tool_registry import tool_registry
 from app.services.web_search_service import web_search_service
+from app.services.lenovo_kb_service import lenovo_kb_service
 from app.schemas.chat import (
     ConversationCreate,
     ConversationUpdate,
@@ -291,6 +292,17 @@ async def chat_completions(req: ChatCompletionRequest):
         max_iterations = settings.max_tool_iterations
 
         try:
+            # Proactive Lenovo Tips & Resources Knowledge Base grounding
+            if lenovo_kb_service.detect_lenovo_intent(req.message):
+                kb_matches = lenovo_kb_service.search(req.message, limit=6, min_score=30.0)
+                if kb_matches:
+                    yield f"data: {json.dumps({'type': 'kb_results', 'query': req.message, 'results': kb_matches})}\n\n"
+                    kb_context_block = lenovo_kb_service.format_context_for_llm(req.message, kb_matches)
+                    current_messages.append({
+                        "role": "system",
+                        "content": kb_context_block,
+                    })
+
             # Proactive search intent detection and factual augmentation
             search_intent_query = web_search_service.detect_search_intent(req.message)
             web_search_enabled = req.enable_web_search if req.enable_web_search is not None else settings.enable_web_search
