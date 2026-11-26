@@ -204,6 +204,7 @@ def inject_chatbox_model_dock():
             let lastLeft = null;
             let lastTop = null;
             let lastVisible = null;
+            let lastDockEl = null;
             let rafId = null;
             let observedChatInput = null;
 
@@ -211,7 +212,11 @@ def inject_chatbox_model_dock():
                 rafId = null;
                 try {
                     const modelDock = doc.querySelector('.st-key-chat_model_dock');
-                    if (!modelDock) return;
+                    if (!modelDock) {
+                        lastDockEl = null;
+                        lastVisible = false;
+                        return;
+                    }
 
                     const chatInput = doc.querySelector('[data-testid="stChatInput"]');
                     if (!chatInput) {
@@ -239,38 +244,67 @@ def inject_chatbox_model_dock():
                         observedChatInput = chatInput;
                     }
 
-                    const submitBtn = chatInput.querySelector('[data-testid="stChatInputSubmitButton"]') ||
-                                      chatInput.querySelector('[data-testid="stChatInputStopButton"]') ||
-                                      chatInput.querySelector('button[aria-label="Send message"]') ||
-                                      chatInput.querySelector('button[aria-label="Stop message"]') ||
-                                      chatInput.querySelector('button:last-of-type');
+                    const chatRect = chatInput.getBoundingClientRect();
+                    if (chatRect.width === 0 || chatRect.height === 0) return;
 
-                    if (!submitBtn) {
-                        if (lastVisible !== false) {
-                            modelDock.classList.remove('dock-aligned');
-                            lastVisible = false;
+                    // Strictly pick the RIGHT-side Send/Stop button (never the left '+' upload button)
+                    let submitBtn = chatInput.querySelector('[data-testid="stChatInputSubmitButton"]') ||
+                                    chatInput.querySelector('[data-testid="stChatInputStopButton"]') ||
+                                    chatInput.querySelector('button[aria-label="Send message"]') ||
+                                    chatInput.querySelector('button[aria-label="Stop message"]');
+
+                    if (submitBtn) {
+                        const sr = submitBtn.getBoundingClientRect();
+                        if (sr.width === 0 || sr.left <= chatRect.left + chatRect.width * 0.45) {
+                            submitBtn = null;
                         }
-                        return;
                     }
-
-                    const btnRect = submitBtn.getBoundingClientRect();
-                    if (btnRect.width === 0 || btnRect.height === 0) return;
+                    if (!submitBtn) {
+                        const rightBtns = Array.from(chatInput.querySelectorAll('button')).filter(function(b) {
+                            const r = b.getBoundingClientRect();
+                            return r.width > 0 && r.height > 0 && r.left > chatRect.left + chatRect.width * 0.45;
+                        });
+                        if (rightBtns.length > 0) {
+                            rightBtns.sort(function(a, b) {
+                                return b.getBoundingClientRect().right - a.getBoundingClientRect().right;
+                            });
+                            submitBtn = rightBtns[0];
+                        }
+                    }
 
                     const dockWidth = 165;
                     const dockHeight = 32;
-                    const targetLeft = Math.round(btnRect.left - dockWidth - 8);
-                    const targetTop = Math.round(btnRect.top + (btnRect.height - dockHeight) / 2);
+                    let targetLeft;
+                    let targetTop;
+                    if (submitBtn) {
+                        const btnRect = submitBtn.getBoundingClientRect();
+                        targetLeft = Math.round(btnRect.left - dockWidth - 8);
+                        targetTop = Math.round(btnRect.top + (btnRect.height - dockHeight) / 2);
+                    } else {
+                        // Safe anchor pinned cleanly to the right side of stChatInput
+                        targetLeft = Math.round(chatRect.right - dockWidth - 52);
+                        targetTop = Math.round(chatRect.bottom - 14 - dockHeight);
+                    }
 
-                    // Only write DOM styles when coordinates or visibility actually changed
-                    if (lastLeft !== targetLeft) {
+                    // Clamp inside chatInput horizontal bounds so it never drifts outside or onto left '+' button
+                    const minSafeLeft = Math.round(chatRect.left + Math.max(48, chatRect.width - dockWidth - 96));
+                    if (targetLeft < minSafeLeft && chatRect.width > dockWidth + 110) {
+                        targetLeft = Math.round(chatRect.right - dockWidth - 52);
+                    }
+
+                    const isNewEl = (lastDockEl !== modelDock);
+                    lastDockEl = modelDock;
+
+                    // Re-apply inline position whenever element is newly mounted or coordinates changed
+                    if (isNewEl || !modelDock.style.left || lastLeft !== targetLeft) {
                         modelDock.style.left = targetLeft + 'px';
                         lastLeft = targetLeft;
                     }
-                    if (lastTop !== targetTop) {
+                    if (isNewEl || !modelDock.style.top || lastTop !== targetTop) {
                         modelDock.style.top = targetTop + 'px';
                         lastTop = targetTop;
                     }
-                    if (lastVisible !== true || !modelDock.classList.contains('dock-aligned')) {
+                    if (isNewEl || lastVisible !== true || !modelDock.classList.contains('dock-aligned')) {
                         modelDock.classList.add('dock-aligned');
                         lastVisible = true;
                     }
@@ -293,7 +327,6 @@ def inject_chatbox_model_dock():
             let mutObserver = null;
             if (doc.body && typeof win.MutationObserver === 'function') {
                 mutObserver = new win.MutationObserver(function(mutations) {
-                    // Only schedule alignment if nodes were added/removed (not pure text streaming inside existing spans)
                     for (let i = 0; i < mutations.length; i++) {
                         if (mutations[i].addedNodes.length > 0 || mutations[i].removedNodes.length > 0) {
                             scheduleAlign();
@@ -305,7 +338,9 @@ def inject_chatbox_model_dock():
             }
 
             win.addEventListener('resize', scheduleAlign, { passive: true });
-            const intervalId = win.setInterval(scheduleAlign, 600);
+            win.addEventListener('scroll', scheduleAlign, { passive: true, capture: true });
+            doc.addEventListener('transitionend', scheduleAlign, { passive: true, capture: true });
+            const intervalId = win.setInterval(alignModelDockNow, 250);
 
             win.__isotopeDockController = {
                 cleanup: function() {
@@ -316,6 +351,8 @@ def inject_chatbox_model_dock():
                     if (mutObserver) mutObserver.disconnect();
                     if (resizeObserver) resizeObserver.disconnect();
                     win.removeEventListener('resize', scheduleAlign);
+                    win.removeEventListener('scroll', scheduleAlign, { capture: true });
+                    doc.removeEventListener('transitionend', scheduleAlign, { capture: true });
                     win.clearInterval(intervalId);
                 }
             };
@@ -681,19 +718,21 @@ st.markdown("""
     /* Bottom Chat Model Selector Styling - Fixed Dock directly inside Chatbox Bar */
     .st-key-chat_model_dock {
         position: fixed !important;
+        right: auto !important;
+        bottom: auto !important;
         z-index: 9999 !important;
         width: 165px !important;
         height: 32px !important;
         margin: 0 !important;
         padding: 0 !important;
-        display: none;
+        visibility: hidden;
         opacity: 0;
         pointer-events: none;
-        transition: opacity 0.15s ease;
+        transition: opacity 0.12s ease;
     }
 
     .st-key-chat_model_dock.dock-aligned {
-        display: block !important;
+        visibility: visible !important;
         opacity: 1 !important;
         pointer-events: auto !important;
     }
@@ -2436,7 +2475,6 @@ def render_admin_audit_dashboard(key_prefix: str = "audit", show_title: bool = T
     summary = analytics["summary"]
     per_user = analytics["per_user_stats"]
     daily_rows = analytics["daily_activity"]
-    feature_rows = analytics["feature_breakdown"]
     model_rows = analytics["model_usage"]
     recent_events = analytics["recent_events"]
 
@@ -2550,47 +2588,25 @@ def render_admin_audit_dashboard(key_prefix: str = "audit", show_title: bool = T
             )
             st.altair_chart(chart_users, use_container_width=True)
 
-    # Charts Row 2: Feature Breakdown + Model Distribution
-    c_chart3, c_chart4 = st.columns(2)
-    with c_chart3:
-        st.markdown("##### 🧩 Feature & Command Breakdown")
-        if feature_rows:
-            df_feat = pd.DataFrame(feature_rows)
-            chart_feat = (
-                alt.Chart(df_feat)
-                .mark_bar(cornerRadiusTopRight=4, cornerRadiusBottomRight=4, color="#c084fc")
-                .encode(
-                    x=alt.X("Count:Q", title="Events", axis=alt.Axis(labelColor="#94a3b8", titleColor="#cbd5e1", gridColor="rgba(56,189,248,0.12)")),
-                    y=alt.Y("Feature:N", sort="-x", title="", axis=alt.Axis(labelColor="#e2e8f0")),
-                    tooltip=["Feature:N", "Count:Q"],
-                )
-                .properties(height=220)
-                .configure(background="transparent")
-                .configure_view(strokeWidth=0)
+    # Charts Row 2: Model Usage Distribution
+    st.markdown("##### 🤖 Model Usage Distribution")
+    if model_rows:
+        df_models = pd.DataFrame(model_rows)
+        chart_models = (
+            alt.Chart(df_models)
+            .mark_bar(cornerRadiusTopRight=4, cornerRadiusBottomRight=4, color="#38bdf8")
+            .encode(
+                x=alt.X("Requests:Q", title="Requests / Chats", axis=alt.Axis(labelColor="#94a3b8", titleColor="#cbd5e1", gridColor="rgba(56,189,248,0.12)")),
+                y=alt.Y("Model:N", sort="-x", title="", axis=alt.Axis(labelColor="#e2e8f0")),
+                tooltip=["Model:N", "Requests:Q", "Est. Tokens:Q", "Avg Latency (ms):Q"],
             )
-            st.altair_chart(chart_feat, use_container_width=True)
-        else:
-            st.info("No feature events logged in this timeframe yet.")
-
-    with c_chart4:
-        st.markdown("##### 🤖 Model Usage Distribution")
-        if model_rows:
-            df_models = pd.DataFrame(model_rows)
-            chart_models = (
-                alt.Chart(df_models)
-                .mark_bar(cornerRadiusTopRight=4, cornerRadiusBottomRight=4, color="#38bdf8")
-                .encode(
-                    x=alt.X("Requests:Q", title="Requests / Chats", axis=alt.Axis(labelColor="#94a3b8", titleColor="#cbd5e1", gridColor="rgba(56,189,248,0.12)")),
-                    y=alt.Y("Model:N", sort="-x", title="", axis=alt.Axis(labelColor="#e2e8f0")),
-                    tooltip=["Model:N", "Requests:Q", "Est. Tokens:Q", "Avg Latency (ms):Q"],
-                )
-                .properties(height=220)
-                .configure(background="transparent")
-                .configure_view(strokeWidth=0)
-            )
-            st.altair_chart(chart_models, use_container_width=True)
-        else:
-            st.info("No model usage recorded yet.")
+            .properties(height=220)
+            .configure(background="transparent")
+            .configure_view(strokeWidth=0)
+        )
+        st.altair_chart(chart_models, use_container_width=True)
+    else:
+        st.info("No model usage recorded yet.")
 
     st.markdown("---")
 

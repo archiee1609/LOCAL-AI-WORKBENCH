@@ -246,6 +246,8 @@ def test_streamlit_admin_audit_dashboard_renders_cleanly():
     assert "Registered Accounts" in metric_labels
     assert "Users Using App (All-Time)" in metric_labels
     assert "Tracked Prompts & Actions" in metric_labels
+    assert any("Model Usage Distribution" in m.value for m in at_admin.markdown)
+    assert not any("Feature & Command Breakdown" in m.value for m in at_admin.markdown)
 
     # 2. Regular User must NOT see Audit & Analytics in navigation
     at_user = AppTest.from_file(str(app_path.resolve()), default_timeout=30)
