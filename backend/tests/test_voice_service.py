@@ -91,7 +91,7 @@ def test_api_transcribe_multipart_endpoint(client):
     """Verifies multipart audio file upload to /api/voice/transcribe."""
     mock_sr = MagicMock()
     mock_recognizer = MagicMock()
-    mock_recognizer.recognize_google.return_value = "open local ai workbench"
+    mock_recognizer.recognize_google.return_value = "open isotope"
     mock_sr.Recognizer.return_value = mock_recognizer
 
     audio_bytes = create_synthetic_wav(duration=0.5, frequency=300.0, amplitude=10000)
@@ -105,7 +105,7 @@ def test_api_transcribe_multipart_endpoint(client):
         assert res.status_code == 200
         data = res.json()
         assert data["success"] is True
-        assert data["text"] == "open local ai workbench"
+        assert data["text"] == "open isotope"
         assert data["engine"] == "google"
 
 

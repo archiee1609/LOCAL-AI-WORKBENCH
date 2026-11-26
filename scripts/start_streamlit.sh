@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ========================================================
-#       LOCAL AI WORKBENCH - STREAMLIT LAUNCHER
+#       ISOTOPE - AI COMPANION STREAMLIT LAUNCHER
 #       Supports macOS (Apple Silicon & Intel) & Linux
 # ========================================================
 
@@ -10,7 +10,7 @@ ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "${ROOT_DIR}"
 
 echo "========================================================"
-echo "        LOCAL AI WORKBENCH - STREAMLIT LAUNCHER         "
+echo "      ISOTOPE - AI COMPANION STREAMLIT LAUNCHER         "
 echo "========================================================"
 echo ""
 
@@ -55,7 +55,7 @@ fi
 URL="http://127.0.0.1:8501"
 
 if curl -s -m 1 http://127.0.0.1:8501/_stcore/health >/dev/null 2>&1 || curl -s -m 1 http://127.0.0.1:8501 >/dev/null 2>&1; then
-    echo "[+] Local AI Workbench is already running at ${URL}!"
+    echo "[+] Isotope is already running at ${URL}!"
     echo "[*] Opening in browser..."
     if command -v open >/dev/null 2>&1; then
         open "${URL}"
@@ -66,7 +66,7 @@ if curl -s -m 1 http://127.0.0.1:8501/_stcore/health >/dev/null 2>&1 || curl -s 
 fi
 
 echo ""
-echo "[*] Starting Local AI Workbench via Streamlit at ${URL}..."
+echo "[*] Starting Isotope via Streamlit at ${URL}..."
 echo "[*] Press Ctrl+C to stop the application."
 echo ""
 

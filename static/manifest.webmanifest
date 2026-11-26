@@ -1,7 +1,7 @@
 {
-  "name": "Local AI Workbench (Studio)",
-  "short_name": "AI Studio",
-  "description": "Private, local-first AI studio running natively on your workstation.",
+  "name": "Isotope - AI Companion",
+  "short_name": "Isotope",
+  "description": "Private, local-first AI companion running natively on your workstation.",
   "start_url": "/",
   "scope": "/",
   "id": "/?source=streamlit_pwa",

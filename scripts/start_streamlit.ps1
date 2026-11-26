@@ -1,8 +1,8 @@
-# Local AI Workbench - Streamlit PowerShell Launch Script
+# Isotope - AI Companion - Streamlit PowerShell Launch Script
 $ErrorActionPreference = "Continue"
 
 Write-Host "========================================================" -ForegroundColor Cyan
-Write-Host "       LOCAL AI WORKBENCH - STREAMLIT LAUNCHER" -ForegroundColor Cyan
+Write-Host "     ISOTOPE - AI COMPANION STREAMLIT LAUNCHER" -ForegroundColor Cyan
 Write-Host "========================================================`n" -ForegroundColor Cyan
 
 $rootDir = Split-Path -Parent $PSScriptRoot
@@ -22,7 +22,7 @@ try {
 }
 
 
-Write-Host "`n[*] Starting Local AI Workbench via Streamlit at http://127.0.0.1:8501..." -ForegroundColor Green
+Write-Host "`n[*] Starting Isotope via Streamlit at http://127.0.0.1:8501..." -ForegroundColor Green
 Write-Host "[*] Opening browser..." -ForegroundColor Gray
 Start-Process "http://127.0.0.1:8501"
 

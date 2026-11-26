@@ -107,7 +107,7 @@ The architecture employs strict tier isolation to enforce zero-trust security bo
 | **Phase 3: Autonomous Maturity** | Days 91–180 | Continuous self-tuning, enterprise agent pipelines | CTO / Advisory | 3x team productivity |
 
 ## 💰 7. Financial & Resource ROI Analysis
-| Cost Category | Cloud API Model (Monthly) | Local AI Workbench (Monthly) | 12-Month Net Savings |
+| Cost Category | Cloud API Model (Monthly) | Isotope (Monthly) | 12-Month Net Savings |
 | :--- | :--- | :--- | :--- |
 | **Inference Usage (2.5M tokens/day)** | $2,200.00 | $0.00 (Local Hardware) | $26,400.00 |
 | **Image Creation (600 renders/mo)** | $300.00 | $0.00 (ComfyUI) | $3,600.00 |

@@ -87,7 +87,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </div>
             <div>
               <div className="text-xs font-bold tracking-tight text-main flex items-center gap-1.5">
-                <span>AI WORKBENCH</span>
+                <span>ISOTOPE</span>
               </div>
               <p className="text-2xs font-mono text-dim tracking-wider">POWER WORKSTATION</p>
             </div>

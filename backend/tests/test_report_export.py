@@ -15,7 +15,7 @@ SAMPLE_REPORT_MD = """## 📄 Executive Architecture & Performance Assessment
 ---
 
 # Executive Summary
-The Local AI Workbench architecture delivers low-latency private AI execution on local client hardware.
+The Isotope architecture delivers low-latency private AI execution on local client hardware.
 
 # System Architecture
 The system consists of three interconnected layers:

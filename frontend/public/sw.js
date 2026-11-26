@@ -1,5 +1,5 @@
-// Local AI Workbench - Progressive Web App Service Worker
-const CACHE_NAME = 'ai-workbench-shell-v1';
+// Isotope - AI Companion - Progressive Web App Service Worker
+const CACHE_NAME = 'isotope-shell-v1';
 const SHELL_ASSETS = [
   '/',
   '/index.html',
@@ -56,7 +56,7 @@ self.addEventListener('fetch', (event) => {
       fetch(event.request).catch(async () => {
         const cache = await caches.open(CACHE_NAME);
         const cachedIndex = await cache.match('/index.html');
-        return cachedIndex || new Response('Offline: Local AI Workbench server is currently unavailable.', {
+        return cachedIndex || new Response('Offline: Isotope server is currently unavailable.', {
           status: 503,
           headers: { 'Content-Type': 'text/plain' }
         });

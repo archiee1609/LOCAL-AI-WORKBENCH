@@ -1,7 +1,7 @@
 # Ollama Integration Guide
 
 ## Overview
-Local AI Workbench connects to your locally installed Ollama instance running on `http://127.0.0.1:11434`.
+Isotope connects to your locally installed Ollama instance running on `http://127.0.0.1:11434`.
 
 The application dynamically discovers models via the `/api/tags` endpoint and queries `/api/show` for parameter sizes, quantization levels, context lengths, and supported capabilities.
 
@@ -20,7 +20,7 @@ Invoke-RestMethod -Uri "http://127.0.0.1:11434/api/version"
 ---
 
 ## 2. Hardware-Aware Model Advisor & Installation
-Local AI Workbench includes an intelligent **Hardware-Aware Model Advisor** and **Model Downloader** that automatically detects your compute specifications and suggests which models to download:
+Isotope includes an intelligent **Hardware-Aware Model Advisor** and **Model Downloader** that automatically detects your compute specifications and suggests which models to download:
 
 * **Hardware Rig Profiling**: Analyzes CPU threads, host RAM, GPU vendor (NVIDIA, AMD, Intel, Apple Silicon, Qualcomm), and dedicated/unified VRAM headroom.
 * **Smart Tier Mapping**:
@@ -44,7 +44,7 @@ Local AI Workbench includes an intelligent **Hardware-Aware Model Advisor** and 
 ---
 
 ## 3. Tested & Preferred Installed Models
-The Workbench automatically recognizes your existing models:
+Isotope automatically recognizes your existing models:
 * **`gemma4:12b`**:
   - Size: 11.9B parameters (`Q4_K_M` quantization)
   - Context Window: up to 262,144 tokens
@@ -57,7 +57,7 @@ The Workbench automatically recognizes your existing models:
 ---
 
 ## 4. Dynamic Model Switching
-1. Open Local AI Workbench in your browser (`http://127.0.0.1:8000`).
+1. Open Isotope in your browser (`http://127.0.0.1:8000`).
 2. The **Active Model** dropdown in the header and sidebar displays all installed models.
 3. Select any installed model. The selection applies immediately to all subsequent chat prompts, reports, and agent tasks.
 4. Model parameters (Temperature, Context Window, System Prompt) can be fine-tuned via the **Sliders** button in the chat header.

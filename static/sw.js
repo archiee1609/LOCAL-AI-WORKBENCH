@@ -1,5 +1,5 @@
 // Streamlit PWA Service Worker
-const CACHE_NAME = 'ai-workbench-streamlit-v1';
+const CACHE_NAME = 'isotope-streamlit-v1';
 const STATIC_ASSETS = [
   '/app/static/manifest.webmanifest',
   '/app/static/icons/icon.svg',

@@ -1,8 +1,8 @@
-# Local AI Workbench - PowerShell Installation Script
+# Isotope - AI Companion - PowerShell Installation Script
 $ErrorActionPreference = "Stop"
 
 Write-Host "========================================================" -ForegroundColor Cyan
-Write-Host "       LOCAL AI WORKBENCH - INSTALLATION SCRIPT" -ForegroundColor Cyan
+Write-Host "     ISOTOPE - AI COMPANION INSTALLATION SCRIPT" -ForegroundColor Cyan
 Write-Host "========================================================`n" -ForegroundColor Cyan
 
 # 1. Check Python

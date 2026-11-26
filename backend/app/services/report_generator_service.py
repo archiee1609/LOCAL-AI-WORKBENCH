@@ -98,7 +98,7 @@ Hardware & Environmental Grounding:
 {memories_str}
 
 SYSTEM ARCHITECTURE & EXPORT DIRECTIVE:
-The local host workbench features an automated document compiler that instantly generates downloadable PDF, Word (.docx), Excel (.xlsx), PowerPoint (.pptx), and ZIP bundles directly from your Markdown output.
+Isotope features an automated document compiler that instantly generates downloadable PDF, Word (.docx), Excel (.xlsx), PowerPoint (.pptx), and ZIP bundles directly from your Markdown output.
 Do NOT attempt to write PDF generation scripts or output raw bytes.
 Produce the full, exhaustive, professional analysis directly in clean Markdown following the exact structured blueprint below.
 
@@ -177,8 +177,8 @@ Detail a thorough risk evaluation table with severity ratings and mitigation con
 | **Phase 3: Autonomous Maturity** | Days 91–180 | Continuous self-tuning, enterprise agent pipelines | CTO / Advisory | 3x team productivity |
 
 ## 💰 7. Financial & Resource ROI Analysis
-Provide a financial comparison table comparing cloud API costs (GPT-4 / Claude / Midjourney APIs) vs Local AI Workbench over 12 months:
-| Cost Category | Cloud API Model (Monthly) | Local AI Workbench (Monthly) | 12-Month Net Savings |
+Provide a financial comparison table comparing cloud API costs (GPT-4 / Claude / Midjourney APIs) vs Isotope over 12 months:
+| Cost Category | Cloud API Model (Monthly) | Isotope (Monthly) | 12-Month Net Savings |
 | :--- | :--- | :--- | :--- |
 | **Inference Usage (2M tokens/day)** | $1,800.00 | $0.00 (Local Hardware) | $21,600.00 |
 | **Image Creation (500 renders/mo)** | $250.00 | $0.00 (ComfyUI) | $3,000.00 |

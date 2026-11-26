@@ -1,7 +1,7 @@
 # Security & Permission Controls Guide
 
 ## Architectural Security Principles
-Local AI Workbench is built on a "local-first, security-in-depth" architecture. All security decisions and file boundaries are enforced strictly by the backend authority, never trusted to AI prompts or frontend logic alone.
+Isotope is built on a "local-first, security-in-depth" architecture. All security decisions and file boundaries are enforced strictly by the backend authority, never trusted to AI prompts or frontend logic alone.
 
 ---
 

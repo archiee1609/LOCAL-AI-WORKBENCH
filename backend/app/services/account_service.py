@@ -88,7 +88,7 @@ class AccountService:
         if not readme_file.exists():
             readme_file.write_text(
                 f"# Private Workspace: @{clean_user}\n\n"
-                f"This directory is your private, isolated workspace inside Local AI Workbench.\n"
+                f"This directory is your private, isolated workspace inside Isotope.\n"
                 f"All coding agent tasks, created files, and sandboxed tool executions operate here.\n",
                 encoding="utf-8"
             )

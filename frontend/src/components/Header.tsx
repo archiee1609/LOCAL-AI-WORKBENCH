@@ -102,7 +102,7 @@ export const Header: React.FC<HeaderProps> = ({
         setDeferredPrompt(null);
       }
     } else {
-      alert('To install Local AI Workbench as an app:\n\n1. Look for the Install icon (⊞ or ⬇) in your browser address bar (top-right).\n2. Or open your browser menu (⋮) and click "Install Local AI Workbench".');
+      alert('To install Isotope - AI Companion as an app:\n\n1. Look for the Install icon (⊞ or ⬇) in your browser address bar (top-right).\n2. Or open your browser menu (⋮) and click "Install Isotope - AI Companion".');
     }
   };
 
@@ -121,7 +121,7 @@ export const Header: React.FC<HeaderProps> = ({
           </div>
           <div>
             <div className="flex items-center gap-1.5">
-              <span className="font-extrabold text-sm text-slate-900 tracking-tight">AI WORKBENCH</span>
+              <span className="font-extrabold text-sm text-slate-900 tracking-tight">ISOTOPE</span>
               <span className="badge badge-success text-[10px] py-0.5 px-1.5 font-bold">
                 Local-First
               </span>
@@ -236,7 +236,7 @@ export const Header: React.FC<HeaderProps> = ({
               <button
                 onClick={handleInstallApp}
                 className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-2xs font-bold bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200/90 shadow-2xs transition"
-                title="Install Local AI Workbench as a Native Web App"
+                title="Install Isotope - AI Companion as a Native Web App"
               >
                 <Download size={12} />
                 <span>Install App</span>

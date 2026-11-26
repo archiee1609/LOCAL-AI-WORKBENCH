@@ -97,7 +97,7 @@ When a concept requires structural visualization (system architecture, state mac
 </execution_protocol>"""
 
 class Settings(BaseModel):
-    app_name: str = "Local AI Workbench"
+    app_name: str = "Isotope - AI Companion"
     app_version: str = "1.0.0"
     host: str = "127.0.0.1"
     port: int = 8000

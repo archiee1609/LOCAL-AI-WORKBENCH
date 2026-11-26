@@ -2,7 +2,7 @@
 setlocal enabledelayedexpansion
 
 echo ========================================================
-echo        LOCAL AI WORKBENCH - INSTALLATION SCRIPT
+echo       ISOTOPE - AI COMPANION INSTALLATION SCRIPT
 echo ========================================================
 echo.
 

@@ -1,8 +1,8 @@
-# Local AI Workbench - PowerShell Start Script
+# Isotope - AI Companion - PowerShell Start Script
 $ErrorActionPreference = "Continue"
 
 Write-Host "========================================================" -ForegroundColor Cyan
-Write-Host "         LOCAL AI WORKBENCH - LAUNCH SCRIPT" -ForegroundColor Cyan
+Write-Host "       ISOTOPE - AI COMPANION LAUNCH SCRIPT" -ForegroundColor Cyan
 Write-Host "========================================================`n" -ForegroundColor Cyan
 
 $rootDir = Split-Path -Parent $PSScriptRoot
@@ -22,7 +22,7 @@ try {
 }
 
 
-Write-Host "`n[*] Starting Local AI Workbench at http://127.0.0.1:8000..." -ForegroundColor Green
+Write-Host "`n[*] Starting Isotope at http://127.0.0.1:8000..." -ForegroundColor Green
 Write-Host "[*] Opening browser..." -ForegroundColor Gray
 Start-Process "http://127.0.0.1:8000"
 

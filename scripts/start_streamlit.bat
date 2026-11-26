@@ -2,7 +2,7 @@
 setlocal enabledelayedexpansion
 
 echo ========================================================
-echo        LOCAL AI WORKBENCH - STREAMLIT LAUNCHER
+echo        ISOTOPE - AI COMPANION STREAMLIT LAUNCHER
 echo ========================================================
 echo.
 
@@ -23,7 +23,7 @@ if errorlevel 1 (
 
 :: 2. Launch Streamlit Application
 echo.
-echo [*] Starting Local AI Workbench via Streamlit at http://127.0.0.1:8501...
+echo [*] Starting Isotope via Streamlit at http://127.0.0.1:8501...
 echo [*] Press Ctrl+C in this terminal window to stop the application.
 echo.
 

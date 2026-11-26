@@ -92,8 +92,8 @@ export const CodingAgentPage: React.FC = () => {
       const targetFilePath = selectedFile || 'workbench_util.py';
       const proposedCode =
         fileContent && fileContent.trim()
-          ? `${fileContent}\n\n# Added by Local AI Workbench Coding Agent\ndef workbench_health_check():\n    \"\"\"Automated health check helper.\"\"\"\n    return {\"status\": \"ok\", \"agent\": \"local_workbench\"}\n`
-          : `# Created by Local AI Workbench Coding Agent\ndef workbench_health_check():\n    \"\"\"Automated health check helper.\"\"\"\n    return {\"status\": \"ok\", \"agent\": \"local_workbench\"}\n`;
+          ? `${fileContent}\n\n# Added by Isotope Coding Agent\ndef workbench_health_check():\n    \"\"\"Automated health check helper.\"\"\"\n    return {\"status\": \"ok\", \"agent\": \"local_workbench\"}\n`
+          : `# Created by Isotope Coding Agent\ndef workbench_health_check():\n    \"\"\"Automated health check helper.\"\"\"\n    return {\"status\": \"ok\", \"agent\": \"local_workbench\"}\n`;
 
       const diffRes = await api.computeDiff(targetFilePath, proposedCode);
 
@@ -124,8 +124,8 @@ export const CodingAgentPage: React.FC = () => {
       const targetFilePath = activeTask.affected_files[0] || selectedFile || 'workbench_util.py';
       const updatedCode =
         fileContent && fileContent.trim()
-          ? `${fileContent}\n\n# Added by Local AI Workbench Coding Agent\ndef workbench_health_check():\n    \"\"\"Automated health check helper.\"\"\"\n    return {\"status\": \"ok\", \"agent\": \"local_workbench\"}\n`
-          : `# Created by Local AI Workbench Coding Agent\ndef workbench_health_check():\n    \"\"\"Automated health check helper.\"\"\"\n    return {\"status\": \"ok\", \"agent\": \"local_workbench\"}\n`;
+          ? `${fileContent}\n\n# Added by Isotope Coding Agent\ndef workbench_health_check():\n    \"\"\"Automated health check helper.\"\"\"\n    return {\"status\": \"ok\", \"agent\": \"local_workbench\"}\n`
+          : `# Created by Isotope Coding Agent\ndef workbench_health_check():\n    \"\"\"Automated health check helper.\"\"\"\n    return {\"status\": \"ok\", \"agent\": \"local_workbench\"}\n`;
 
       await api.applyCodingChanges(
         activeTask.id,

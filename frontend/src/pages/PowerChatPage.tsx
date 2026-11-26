@@ -166,7 +166,7 @@ export const PowerChatPage: React.FC<PowerChatPageProps> = ({
   const [temperature, setTemperature] = useState(0.7);
   const [contextLength, setContextLength] = useState(8192);
   const [systemPrompt, setSystemPrompt] = useState(
-    'You are Local AI Workbench, an all-in-one expert assistant capable of general reasoning, coding, writing formal reports, and analyzing data. Be precise, helpful, and structured.'
+    'You are Isotope, an AI companion and all-in-one expert assistant capable of general reasoning, coding, writing formal reports, and analyzing data. Be precise, helpful, and structured.'
   );
 
   // Modals & Panels
@@ -927,7 +927,7 @@ export const PowerChatPage: React.FC<PowerChatPageProps> = ({
                 <Sparkles size={32} />
               </div>
               <div>
-                <h2 className="text-xl font-extrabold text-slate-900 tracking-tight">Local AI Power Workbench</h2>
+                <h2 className="text-xl font-extrabold text-slate-900 tracking-tight">Isotope - AI Companion</h2>
                 <p className="text-xs text-slate-500 mt-1 max-w-md leading-relaxed">
                   Your local-first, all-in-one workstation. Chat, generate images with ComfyUI, compile formal executive reports, and run coding tasks offline.
                 </p>

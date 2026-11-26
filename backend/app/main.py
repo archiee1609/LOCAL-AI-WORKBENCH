@@ -37,7 +37,7 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    logger.info("Shutting down Local AI Workbench backend...")
+    logger.info("Shutting down Isotope backend...")
     try:
         await ollama_service.stop_service()
     except Exception:
@@ -46,7 +46,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title=settings.app_name,
     version=settings.app_version,
-    description="Local AI Workbench Backend API",
+    description="Isotope - AI Companion Backend API",
     lifespan=lifespan
 )
 

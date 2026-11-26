@@ -9,7 +9,7 @@ def test_root_endpoint():
     assert res.status_code == 200
     if "application/json" in res.headers.get("content-type", ""):
         data = res.json()
-        assert data["app"] == "Local AI Workbench"
+        assert data["app"] == "Isotope - AI Companion"
     else:
         assert "<html" in res.text.lower()
 

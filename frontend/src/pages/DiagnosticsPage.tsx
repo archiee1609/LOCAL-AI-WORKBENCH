@@ -115,7 +115,7 @@ export const DiagnosticsPage: React.FC = () => {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `workbench_diagnostics_${Date.now()}.json`;
+    a.download = `isotope_diagnostics_${Date.now()}.json`;
     a.click();
     URL.revokeObjectURL(url);
   };

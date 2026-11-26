@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # ========================================================
-#       LOCAL AI WORKBENCH - PROCESS TERMINATION SCRIPT
+#       ISOTOPE - AI COMPANION PROCESS TERMINATION SCRIPT
 #       Supports macOS (Apple Silicon & Intel) & Linux
 # ========================================================
 
-echo "[*] Stopping Local AI Workbench, Streamlit, ComfyUI, and background services..."
+echo "[*] Stopping Isotope, Streamlit, ComfyUI, and background services..."
 
 # Gracefully terminate Streamlit
 pkill -f "streamlit.*streamlit_app.py" 2>/dev/null && echo "[+] Stopped Streamlit runner." || true
@@ -22,4 +22,4 @@ if pgrep -f "ollama serve" >/dev/null 2>&1; then
     pkill -f "ollama serve" 2>/dev/null && echo "[+] Stopped Ollama background service." || true
 fi
 
-echo "[*] All Local AI Workbench processes stopped successfully."
+echo "[*] All Isotope processes stopped successfully."

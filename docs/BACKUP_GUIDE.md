@@ -1,7 +1,7 @@
 # Database Backup & Recovery Guide
 
 ## Overview
-Local AI Workbench persists all user data in a local SQLite database (`data/workbench.db`).
+Isotope persists all user data in a local SQLite database (`data/workbench.db`).
 
 The storage engine runs in Write-Ahead Logging (WAL) mode (`PRAGMA journal_mode=WAL;`), enabling non-blocking concurrent reads and ACID-compliant writes.
 

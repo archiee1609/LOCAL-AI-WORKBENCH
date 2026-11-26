@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ========================================================
-#       LOCAL AI WORKBENCH - INSTALLATION SCRIPT
+#       ISOTOPE - AI COMPANION INSTALLATION SCRIPT
 #       Supports macOS (Apple Silicon & Intel) & Linux
 # ========================================================
 
@@ -12,7 +12,7 @@ ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "${ROOT_DIR}"
 
 echo "========================================================"
-echo "       LOCAL AI WORKBENCH - INSTALLATION SCRIPT         "
+echo "     ISOTOPE - AI COMPANION INSTALLATION SCRIPT         "
 echo "========================================================"
 echo ""
 

@@ -51,7 +51,7 @@ export const ToolsPage: React.FC = () => {
         else if (k === 'path') defaults[k] = 'README.md';
         else if (k === 'pattern') defaults[k] = '*.py';
         else if (k === 'content') defaults[k] = '# Generated from AI Tools';
-        else if (k === 'json_string') defaults[k] = '{"service": "workbench", "status": "active"}';
+        else if (k === 'json_string') defaults[k] = '{"service": "isotope", "status": "active"}';
         else if (k === 'test_framework') defaults[k] = 'pytest';
         else defaults[k] = '';
       });

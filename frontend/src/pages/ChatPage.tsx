@@ -544,7 +544,7 @@ export const ChatPage: React.FC<ChatPageProps> = ({ selectedModel, models, ollam
               >
                 <Sparkles size={26} />
               </div>
-              <h3 className="text-base font-bold text-main mb-1.5">Welcome to Local AI Workbench</h3>
+              <h3 className="text-base font-bold text-main mb-1.5">Welcome to Isotope</h3>
               <p className="text-xs text-muted leading-relaxed mb-6">
                 Private, local-first intelligence running natively on your workstation. No cloud API keys or telemetry.
               </p>

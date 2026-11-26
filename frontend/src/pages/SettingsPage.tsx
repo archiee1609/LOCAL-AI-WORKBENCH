@@ -160,7 +160,7 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ theme, setTheme, mod
               <SettingsIcon size={20} />
             </div>
             <div>
-              <h2 className="text-base font-bold text-main">Workbench Settings & Data Management</h2>
+              <h2 className="text-base font-bold text-main">Isotope Settings & Data Management</h2>
               <p className="text-xs text-muted">
                 Configure local service endpoints, security boundaries, persistent memories, and database snapshots.
               </p>

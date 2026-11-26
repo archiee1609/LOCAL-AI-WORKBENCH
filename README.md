@@ -1,4 +1,4 @@
-# LOCAL AI WORKBENCH
+# ISOTOPE - AI COMPANION
 
 [![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-brightgreen.svg)]()
 [![Python](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/)
@@ -7,7 +7,7 @@
 [![Ollama](https://img.shields.io/badge/Ollama-Connected-black.svg)](https://ollama.com/)
 [![Tests](https://img.shields.io/badge/Tests-55%20Passed-brightgreen.svg)]()
 
-**Local AI Workbench** is a cross-platform, local-first workstation that delivers comprehensive AI capabilities across **Windows**, **macOS** (Apple Silicon M1/M2/M3/M4 & Intel), and **Linux** (Ubuntu, Debian, Fedora, Arch) through a single unified interface:
+**Isotope - AI Companion** (**Isotope**) is a cross-platform, local-first AI companion and workstation that delivers comprehensive AI capabilities across **Windows**, **macOS** (Apple Silicon M1/M2/M3/M4 & Intel), and **Linux** (Ubuntu, Debian, Fedora, Arch) through a single unified interface:
 
 1. **⚡ Dynamic Resource Detection & Auto Load Balancing**: Real-time telemetry monitoring CPU load, host RAM, and GPU VRAM headroom. Automatically calculates optimal Ollama CPU thread allocation (preventing UI freezes), bounds safe context token limits, tunes prompt batching, and dynamically sets ComfyUI memory modes (`--highvram`, `--medvram`, `--lowvram`, or `--cpu`) to prevent Out-Of-Memory (OOM) crashes.
 2. **All-in-One Power Studio (Flagship Interface)**: Unified power chat combining conversational AI, multi-file uploads (up to 5 documents simultaneously for resume vs JD or code comparison), in-chat image generation (`/image`), executive report generation (`/report`), coding assistance (`/code`), vision understanding, and tool execution in a single thread.
@@ -49,7 +49,7 @@
    ```bash
    ./scripts/start_streamlit.sh
    ```
-   *The workbench automatically launches Ollama, starts ComfyUI (with Apple Silicon Metal or CUDA if available), and opens [http://127.0.0.1:8501](http://127.0.0.1:8501).*
+   *Isotope automatically launches Ollama and opens [http://127.0.0.1:8501](http://127.0.0.1:8501).*
 
 3. **Launch FastAPI Backend & Web Interface**:
    ```bash
@@ -86,7 +86,7 @@
    ```cmd
    python streamlit_app.py
    ```
-   *The workbench opens automatically at [http://127.0.0.1:8501](http://127.0.0.1:8501).*
+   *Isotope opens automatically at [http://127.0.0.1:8501](http://127.0.0.1:8501).*
 
 3. **Launch FastAPI Backend & Web Interface**:
    ```cmd

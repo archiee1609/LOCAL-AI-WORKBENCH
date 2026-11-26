@@ -120,7 +120,7 @@ Please structure the report with:
             
             write_res = await tool_registry.execute_tool(
                 "write_workspace_file",
-                {"path": clean_filename, "content": f"# {req.title}\n*Generated on {now} via Local AI Workbench ({model_name})*\n\n{content}"},
+                {"path": clean_filename, "content": f"# {req.title}\n*Generated on {now} via Isotope ({model_name})*\n\n{content}"},
                 approved=True
             )
             if write_res.status == "success":

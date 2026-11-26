@@ -2,7 +2,7 @@
 setlocal enabledelayedexpansion
 
 echo ========================================================
-echo          LOCAL AI WORKBENCH - LAUNCH SCRIPT
+echo        ISOTOPE - AI COMPANION LAUNCH SCRIPT
 echo ========================================================
 echo.
 
@@ -23,7 +23,7 @@ if errorlevel 1 (
 
 :: 2. Launch Backend & Open Browser
 echo.
-echo [*] Starting Local AI Workbench server at http://127.0.0.1:8000...
+echo [*] Starting Isotope server at http://127.0.0.1:8000...
 echo [*] Press Ctrl+C in this terminal window to stop the application.
 echo.
 

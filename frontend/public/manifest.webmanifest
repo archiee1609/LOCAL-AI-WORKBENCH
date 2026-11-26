@@ -1,6 +1,6 @@
 {
-  "name": "Local AI Workbench",
-  "short_name": "AI Workbench",
+  "name": "Isotope - AI Companion",
+  "short_name": "Isotope",
   "description": "Private, local-first AI workstation for Studio Chat, ComfyUI Image Generation, Vision, and Coding Tools.",
   "start_url": "/",
   "scope": "/",

@@ -1,12 +1,14 @@
 """
-Local AI Workbench - Streamlit Application
-A unified, private, offline AI workstation running natively on your local hardware.
+Isotope - AI Companion - Streamlit Application
+A unified, private, offline AI companion running natively on your local hardware.
 Includes Chat, AI Tool Memory Hub, Coding Agent, Vision, and Tools.
 """
 
 import sys
 import os
 import asyncio
+import threading
+import queue
 import json
 import uuid
 import datetime
@@ -38,7 +40,7 @@ if not is_in_streamlit_runtime and __name__ == "__main__":
     from app.services.ollama_service import ollama_service
 
     print("========================================================")
-    print("       LOCAL AI WORKBENCH - ALL-IN-ONE LAUNCHER         ")
+    print("       ISOTOPE - AI COMPANION LAUNCHER                  ")
     print("========================================================")
     print("[*] Checking local Ollama engine...")
     try:
@@ -47,7 +49,7 @@ if not is_in_streamlit_runtime and __name__ == "__main__":
     except Exception as e:
         print(f"[!] Ollama status notice: {e}")
 
-    print("[*] Launching Local AI Workbench via Streamlit at http://127.0.0.1:8501...")
+    print("[*] Launching Isotope - AI Companion via Streamlit at http://127.0.0.1:8501...")
     script_path = str(Path(__file__).resolve())
     cmd = [sys.executable, "-m", "streamlit", "run", script_path, "--server.port", "8501"] + sys.argv[1:]
     env = os.environ.copy()
@@ -56,7 +58,7 @@ if not is_in_streamlit_runtime and __name__ == "__main__":
         proc = subprocess.run(cmd, env=env)
         sys.exit(proc.returncode)
     except KeyboardInterrupt:
-        print("\n[*] Local AI Workbench stopped.")
+        print("\n[*] Isotope stopped.")
         sys.exit(0)
 
 from app.core.config import settings
@@ -78,67 +80,101 @@ from app.core.load_balancer import load_balancer
 def get_cached_system_info():
     return get_system_summary()
 
-@st.cache_data(ttl=2)
+@st.cache_data(ttl=6)
 def get_cached_load_profile():
-    return get_current_load_profile(get_live_telemetry(force_refresh=True))
+    return get_current_load_profile(get_live_telemetry(force_refresh=False))
 
-# Helper to execute async functions in Streamlit safely
+# Helper to execute async functions in Streamlit safely with a shared persistent event loop
+try:
+    from streamlit.runtime.scriptrunner import add_script_run_ctx, get_script_run_ctx
+except ImportError:
+    try:
+        from streamlit.runtime.scriptrunner_utils.script_run_context import add_script_run_ctx, get_script_run_ctx
+    except ImportError:
+        add_script_run_ctx = None
+        get_script_run_ctx = None
+
+@st.cache_resource
+def _get_shared_async_loop():
+    """Creates a single persistent background asyncio event loop thread for async service calls."""
+    loop = asyncio.new_event_loop()
+    ready = threading.Event()
+    def _run_loop():
+        asyncio.set_event_loop(loop)
+        ready.set()
+        loop.run_forever()
+    t = threading.Thread(target=_run_loop, name="isotope-async-loop", daemon=True)
+    t.start()
+    ready.wait(timeout=2.0)
+    return loop
+
 def run_async(coro):
     try:
         loop = asyncio.get_event_loop()
         if loop.is_running():
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor() as pool:
-                return pool.submit(asyncio.run, coro).result()
+            shared_loop = _get_shared_async_loop()
+            return asyncio.run_coroutine_threadsafe(coro, shared_loop).result()
         return loop.run_until_complete(coro)
     except RuntimeError:
-        return asyncio.run(coro)
+        shared_loop = _get_shared_async_loop()
+        return asyncio.run_coroutine_threadsafe(coro, shared_loop).result()
 
 # Page Configuration
 st.set_page_config(
-    page_title="Local AI Workbench",
+    page_title="Isotope - AI Companion",
     page_icon="⚡",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# PWA Installability Injection (Allows installing as desktop app from Chrome/Edge like YouTube Music)
+# PWA Installability & Font Injection (Runs once per browser window via singleton guard)
 def inject_pwa_support():
     pwa_code = """
     <script>
     (function() {
         try {
-            const doc = window.parent ? window.parent.document : document;
             const win = window.parent || window;
-            
+            if (win.__isotopePwaInitialized) return;
+            win.__isotopePwaInitialized = true;
+
+            const doc = win.document;
+            if (!doc || !doc.head) return;
+
+            if (!doc.querySelector('#isotope-google-fonts')) {
+                const fontLink = doc.createElement('link');
+                fontLink.id = 'isotope-google-fonts';
+                fontLink.rel = 'stylesheet';
+                fontLink.href = 'https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600;700&display=swap';
+                doc.head.appendChild(fontLink);
+            }
+
             if (!doc.querySelector('link[rel="manifest"]')) {
                 const link = doc.createElement('link');
                 link.rel = 'manifest';
                 link.href = '/app/static/manifest.webmanifest';
                 doc.head.appendChild(link);
             }
-            
+
             if (!doc.querySelector('link[rel="apple-touch-icon"]')) {
                 const iconLink = doc.createElement('link');
                 iconLink.rel = 'apple-touch-icon';
                 iconLink.href = '/app/static/icons/icon-192.png';
                 doc.head.appendChild(iconLink);
             }
-            
+
             if (!doc.querySelector('meta[name="theme-color"]')) {
                 const meta = doc.createElement('meta');
                 meta.name = 'theme-color';
                 meta.content = '#4f46e5';
                 doc.head.appendChild(meta);
             }
-            
+
             if ('serviceWorker' in win.navigator) {
                 win.navigator.serviceWorker.register('/app/static/sw.js', { scope: '/' })
-                    .then(reg => console.log('[Streamlit PWA] Service Worker active:', reg.scope))
                     .catch(err => console.debug('[Streamlit PWA] SW notice:', err));
             }
         } catch(e) {
-            console.debug('[Streamlit PWA] Error attaching to window.parent:', e);
+            console.debug('[Streamlit PWA] Notice:', e);
         }
     })();
     </script>
@@ -148,20 +184,170 @@ def inject_pwa_support():
 
 inject_pwa_support()
 
-# Custom Styling (Ultra-Modern, Aesthetic Enterprise Theme)
+# Auto-Dock Model Selector directly inside st.chat_input (Singleton rAF + ResizeObserver, zero layout thrash)
+def inject_chatbox_model_dock():
+    dock_code = """
+    <script>
+    (function() {
+        try {
+            const win = window.parent || window;
+            const doc = win.document;
+            if (!doc) return;
+
+            // Clean up any previous dock controller before attaching (prevents listener leaks across reruns)
+            if (win.__isotopeDockController && typeof win.__isotopeDockController.cleanup === 'function') {
+                win.__isotopeDockController.cleanup();
+            }
+
+            let lastLeft = null;
+            let lastTop = null;
+            let lastVisible = null;
+            let rafId = null;
+            let observedChatInput = null;
+
+            function alignModelDockNow() {
+                rafId = null;
+                try {
+                    const modelDock = doc.querySelector('.st-key-chat_model_dock');
+                    if (!modelDock) return;
+
+                    const chatInput = doc.querySelector('[data-testid="stChatInput"]');
+                    if (!chatInput) {
+                        if (lastVisible !== false) {
+                            modelDock.classList.remove('dock-aligned');
+                            lastVisible = false;
+                            lastLeft = null;
+                            lastTop = null;
+                        }
+                        return;
+                    }
+
+                    // Rescue dock if previously reparented inside stChatInput so React never unmounts it
+                    if (chatInput.contains(modelDock)) {
+                        const mainContainer = doc.querySelector('.main .block-container') || doc.body;
+                        mainContainer.appendChild(modelDock);
+                        lastLeft = null;
+                        lastTop = null;
+                    }
+
+                    // Observe chatInput resize if element changed
+                    if (resizeObserver && observedChatInput !== chatInput) {
+                        if (observedChatInput) resizeObserver.unobserve(observedChatInput);
+                        resizeObserver.observe(chatInput);
+                        observedChatInput = chatInput;
+                    }
+
+                    const submitBtn = chatInput.querySelector('[data-testid="stChatInputSubmitButton"]') ||
+                                      chatInput.querySelector('[data-testid="stChatInputStopButton"]') ||
+                                      chatInput.querySelector('button[aria-label="Send message"]') ||
+                                      chatInput.querySelector('button[aria-label="Stop message"]') ||
+                                      chatInput.querySelector('button:last-of-type');
+
+                    if (!submitBtn) {
+                        if (lastVisible !== false) {
+                            modelDock.classList.remove('dock-aligned');
+                            lastVisible = false;
+                        }
+                        return;
+                    }
+
+                    const btnRect = submitBtn.getBoundingClientRect();
+                    if (btnRect.width === 0 || btnRect.height === 0) return;
+
+                    const dockWidth = 165;
+                    const dockHeight = 32;
+                    const targetLeft = Math.round(btnRect.left - dockWidth - 8);
+                    const targetTop = Math.round(btnRect.top + (btnRect.height - dockHeight) / 2);
+
+                    // Only write DOM styles when coordinates or visibility actually changed
+                    if (lastLeft !== targetLeft) {
+                        modelDock.style.left = targetLeft + 'px';
+                        lastLeft = targetLeft;
+                    }
+                    if (lastTop !== targetTop) {
+                        modelDock.style.top = targetTop + 'px';
+                        lastTop = targetTop;
+                    }
+                    if (lastVisible !== true || !modelDock.classList.contains('dock-aligned')) {
+                        modelDock.classList.add('dock-aligned');
+                        lastVisible = true;
+                    }
+                } catch(e) {
+                    console.debug('[Model Dock] Notice:', e);
+                }
+            }
+
+            function scheduleAlign() {
+                if (rafId !== null) return;
+                rafId = win.requestAnimationFrame(alignModelDockNow);
+            }
+
+            let resizeObserver = null;
+            if (typeof win.ResizeObserver === 'function') {
+                resizeObserver = new win.ResizeObserver(scheduleAlign);
+                if (doc.body) resizeObserver.observe(doc.body);
+            }
+
+            let mutObserver = null;
+            if (doc.body && typeof win.MutationObserver === 'function') {
+                mutObserver = new win.MutationObserver(function(mutations) {
+                    // Only schedule alignment if nodes were added/removed (not pure text streaming inside existing spans)
+                    for (let i = 0; i < mutations.length; i++) {
+                        if (mutations[i].addedNodes.length > 0 || mutations[i].removedNodes.length > 0) {
+                            scheduleAlign();
+                            break;
+                        }
+                    }
+                });
+                mutObserver.observe(doc.body, { childList: true, subtree: true });
+            }
+
+            win.addEventListener('resize', scheduleAlign, { passive: true });
+            const intervalId = win.setInterval(scheduleAlign, 600);
+
+            win.__isotopeDockController = {
+                cleanup: function() {
+                    if (rafId !== null) {
+                        win.cancelAnimationFrame(rafId);
+                        rafId = null;
+                    }
+                    if (mutObserver) mutObserver.disconnect();
+                    if (resizeObserver) resizeObserver.disconnect();
+                    win.removeEventListener('resize', scheduleAlign);
+                    win.clearInterval(intervalId);
+                }
+            };
+
+            alignModelDockNow();
+        } catch(e) {
+            console.debug('[Model Dock] Init notice:', e);
+        }
+    })();
+    </script>
+    """
+    import streamlit.components.v1 as components
+    components.html(dock_code, height=0, width=0)
+
+inject_chatbox_model_dock()
+
+# Custom Styling (Ultra-Modern, GPU-Optimized Enterprise Theme)
 st.markdown("""
 <style>
-    /* Google Plus Jakarta Sans & JetBrains Mono Fonts */
-    @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
-
     :root {
-        --primary-gradient: linear-gradient(135deg, #4f46e5 0%, #6366f1 50%, #818cf8 100%);
-        --primary-glow: rgba(99, 102, 241, 0.25);
-        --surface-card: #ffffff;
-        --border-subtle: #e2e8f0;
-        --border-focus: #6366f1;
-        --text-headline: #0f172a;
-        --text-muted: #64748b;
+        --primary-gradient: linear-gradient(135deg, #00f2fe 0%, #4facfe 40%, #7928ca 100%);
+        --cyber-cyan: #00f2fe;
+        --cyber-neon-blue: #38bdf8;
+        --cyber-purple: #c084fc;
+        --cyber-magenta: #f43f5e;
+        --cyber-emerald: #10b981;
+        --primary-glow: rgba(0, 242, 254, 0.35);
+        --surface-glass: rgba(13, 20, 36, 0.88);
+        --surface-card: rgba(15, 23, 42, 0.86);
+        --border-glass: rgba(56, 189, 248, 0.25);
+        --border-focus: #00f2fe;
+        --text-headline: #f8fafc;
+        --text-body: #e2e8f0;
+        --text-muted: #94a3b8;
     }
 
     * {
@@ -174,13 +360,16 @@ st.markdown("""
         font-family: 'JetBrains Mono', monospace !important;
     }
 
-    /* Overall App Background & Ambient Mesh Gradient */
+    /* Overall App Background & Cyber Wallpaper (no background-attachment: fixed repaint penalty) */
     .stApp {
-        background-color: #f8fafc;
-        background-image: 
-            radial-gradient(ellipse 80% 50% at 50% -10%, rgba(99, 102, 241, 0.07), transparent 70%),
-            radial-gradient(circle at 100% 0%, rgba(16, 185, 129, 0.04), transparent 40%);
-        background-attachment: fixed;
+        background-color: #060911 !important;
+        background-image:
+            linear-gradient(180deg, rgba(6, 9, 17, 0.62) 0%, rgba(6, 9, 17, 0.88) 100%),
+            url('/app/static/cyber_neural_bg.jpg') !important;
+        background-size: cover !important;
+        background-position: center center !important;
+        background-attachment: scroll !important;
+        color: #e2e8f0 !important;
     }
 
     .main .block-container {
@@ -189,11 +378,23 @@ st.markdown("""
         max-width: 1280px;
     }
 
-    /* Sidebar Styling - Premium SaaS Glass Effect */
+    /* Headings & Text Color Overrides for Deep Contrast */
+    h1, h2, h3, h4, h5, h6 {
+        color: #f8fafc !important;
+        font-weight: 700 !important;
+        letter-spacing: -0.015em;
+    }
+    .stMarkdown p {
+        color: #e2e8f0 !important;
+    }
+
+    /* Sidebar Styling - Cyber Command Deck */
     [data-testid="stSidebar"] {
-        background-color: #ffffff;
-        border-right: 1px solid #e2e8f0;
-        box-shadow: 2px 0 12px rgba(0, 0, 0, 0.02);
+        background: rgba(8, 12, 22, 0.94) !important;
+        backdrop-filter: blur(8px) !important;
+        -webkit-backdrop-filter: blur(8px) !important;
+        border-right: 1px solid rgba(56, 189, 248, 0.20) !important;
+        box-shadow: 4px 0 24px rgba(0, 0, 0, 0.60) !important;
     }
 
     [data-testid="stSidebar"] > div:first-child {
@@ -204,16 +405,16 @@ st.markdown("""
 
     [data-testid="stSidebar"] hr {
         margin: 0.85rem 0;
-        border-color: #f1f5f9;
+        border-color: rgba(56, 189, 248, 0.15) !important;
     }
 
     /* Navigation Radio Pills in Sidebar */
     [data-testid="stSidebar"] div[data-testid="stRadio"] > div[role="radiogroup"] {
-        background: #f1f5f9;
+        background: rgba(15, 23, 42, 0.65) !important;
         padding: 0.35rem;
         border-radius: 0.85rem;
         gap: 0.3rem;
-        border: 1px solid #e2e8f0;
+        border: 1px solid rgba(56, 189, 248, 0.20) !important;
     }
 
     [data-testid="stSidebar"] div[data-testid="stRadio"] label {
@@ -221,7 +422,7 @@ st.markdown("""
         padding: 0.55rem 0.95rem !important;
         font-weight: 600;
         font-size: 0.88rem;
-        color: #475569;
+        color: #94a3b8 !important;
         transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
         cursor: pointer;
         border: 1px solid transparent;
@@ -229,17 +430,18 @@ st.markdown("""
     }
 
     [data-testid="stSidebar"] div[data-testid="stRadio"] label:hover {
-        color: #0f172a;
-        background-color: #ffffff;
-        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.03);
+        color: #f8fafc !important;
+        background: rgba(255, 255, 255, 0.06) !important;
+        border-color: rgba(56, 189, 248, 0.25) !important;
     }
 
     [data-testid="stSidebar"] div[data-testid="stRadio"] label[data-checked="true"],
     [data-testid="stSidebar"] div[data-testid="stRadio"] input:checked + div {
-        color: #4f46e5 !important;
+        color: #38bdf8 !important;
         font-weight: 700;
-        background-color: #ffffff !important;
-        box-shadow: 0 2px 8px rgba(79, 70, 229, 0.12) !important;
+        background: linear-gradient(135deg, rgba(6, 182, 212, 0.22) 0%, rgba(99, 102, 241, 0.28) 100%) !important;
+        border: 1px solid rgba(56, 189, 248, 0.45) !important;
+        box-shadow: 0 0 16px rgba(6, 182, 212, 0.30) !important;
     }
 
     /* Sleek Custom Scrollbars */
@@ -248,123 +450,129 @@ st.markdown("""
         height: 6px;
     }
     ::-webkit-scrollbar-track {
-        background: transparent;
+        background: rgba(8, 12, 22, 0.5);
     }
     ::-webkit-scrollbar-thumb {
-        background: #cbd5e1;
+        background: rgba(56, 189, 248, 0.35);
         border-radius: 9999px;
     }
     ::-webkit-scrollbar-thumb:hover {
-        background: #94a3b8;
+        background: #00f2fe;
+        box-shadow: 0 0 8px #00f2fe;
     }
 
-    /* Top Brand Bar - Glassmorphic Aesthetic Header */
+    /* Top Brand Bar - Holographic Header */
     .brand-container {
         display: flex;
         align-items: center;
         justify-content: space-between;
-        padding: 0.9rem 1.4rem;
-        background: rgba(255, 255, 255, 0.85);
-        backdrop-filter: blur(16px);
-        -webkit-backdrop-filter: blur(16px);
-        border: 1px solid rgba(226, 232, 240, 0.9);
+        flex-wrap: wrap;
+        gap: 0.75rem;
+        padding: 0.95rem 1.45rem;
+        background: rgba(13, 20, 36, 0.88) !important;
+        border: 1px solid rgba(56, 189, 248, 0.28) !important;
         border-radius: 1.15rem;
         margin-bottom: 1.25rem;
-        box-shadow: 0 4px 20px -4px rgba(15, 23, 42, 0.05), 0 2px 6px -2px rgba(15, 23, 42, 0.03);
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.10), 0 0 20px rgba(6, 182, 212, 0.12) !important;
     }
     .brand-title {
-        font-size: 1.18rem;
+        font-size: 1.15rem;
         font-weight: 800;
-        color: #0f172a;
-        letter-spacing: -0.025em;
+        color: #f8fafc;
+        letter-spacing: -0.015em;
         display: flex;
         align-items: center;
-        gap: 0.65rem;
+        flex-wrap: wrap;
+        gap: 0.55rem;
     }
     .brand-pill {
         display: inline-flex;
         align-items: center;
         gap: 0.35rem;
-        padding: 0.28rem 0.8rem;
+        padding: 0.28rem 0.75rem;
         font-size: 0.74rem;
         font-weight: 700;
         border-radius: 9999px;
         line-height: 1.2;
-        letter-spacing: 0.01em;
-        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
+        letter-spacing: 0.02em;
+        white-space: nowrap;
+        flex-shrink: 0;
     }
     .pill-success {
-        background-color: #ecfdf5;
-        color: #059669;
-        border: 1px solid #a7f3d0;
+        background: rgba(16, 185, 129, 0.15) !important;
+        color: #34d399 !important;
+        border: 1px solid rgba(52, 211, 153, 0.35) !important;
+        box-shadow: 0 0 10px rgba(52, 211, 153, 0.15);
     }
     .pill-indigo {
-        background-color: #eef2ff;
-        color: #4f46e5;
-        border: 1px solid #c7d2fe;
+        background: rgba(99, 102, 241, 0.18) !important;
+        color: #a5b4fc !important;
+        border: 1px solid rgba(165, 180, 252, 0.35) !important;
+        box-shadow: 0 0 10px rgba(99, 102, 241, 0.18);
     }
     .pill-warning {
-        background-color: #fffbeb;
-        color: #d97706;
-        border: 1px solid #fde68a;
+        background: rgba(245, 158, 11, 0.15) !important;
+        color: #fbbf24 !important;
+        border: 1px solid rgba(251, 191, 36, 0.35) !important;
     }
     .pill-neutral {
-        background-color: #f1f5f9;
-        color: #475569;
-        border: 1px solid #e2e8f0;
+        background: rgba(255, 255, 255, 0.06) !important;
+        color: #cbd5e1 !important;
+        border: 1px solid rgba(255, 255, 255, 0.12) !important;
     }
 
-    /* Cards & Containers */
+    /* Cards & Containers - Futuristic Glassmorphism */
     .stCard, .workbench-card {
-        background-color: #ffffff;
-        border: 1px solid #e2e8f0;
+        background: rgba(13, 20, 36, 0.86) !important;
+        border: 1px solid rgba(56, 189, 248, 0.22) !important;
         border-radius: 1rem;
         padding: 1.35rem;
-        box-shadow: 0 4px 16px -2px rgba(15, 23, 42, 0.04), 0 1px 3px rgba(15, 23, 42, 0.02);
+        box-shadow: 0 8px 28px 0 rgba(0, 0, 0, 0.42), inset 0 1px 0 rgba(255, 255, 255, 0.08) !important;
         margin-bottom: 1rem;
-        transition: border-color 0.2s ease, box-shadow 0.2s ease;
+        transition: border-color 0.15s ease, transform 0.15s ease;
     }
     .workbench-card:hover {
-        border-color: #cbd5e1;
-        box-shadow: 0 8px 24px -4px rgba(15, 23, 42, 0.07);
+        border-color: rgba(56, 189, 248, 0.50) !important;
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.50), 0 0 18px rgba(6, 182, 212, 0.20) !important;
+        transform: translateY(-1.5px);
     }
 
-    /* Primary & Secondary Action Buttons */
+    /* Primary & Secondary Action Buttons - Cyber Glow */
     button[kind="primary"] {
-        background: linear-gradient(135deg, #4f46e5 0%, #6366f1 50%, #7c3aed 100%) !important;
+        background: linear-gradient(135deg, #06b6d4 0%, #4f46e5 50%, #9333ea 100%) !important;
         border: none !important;
         color: #ffffff !important;
-        font-weight: 600 !important;
+        font-weight: 700 !important;
         border-radius: 0.75rem !important;
         padding: 0.55rem 1.25rem !important;
-        box-shadow: 0 3px 10px rgba(79, 70, 229, 0.28) !important;
-        transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1) !important;
-        letter-spacing: -0.01em;
+        box-shadow: 0 4px 16px rgba(6, 182, 212, 0.35) !important;
+        transition: transform 0.15s ease, box-shadow 0.15s ease !important;
+        letter-spacing: 0.01em;
     }
     button[kind="primary"]:hover {
-        box-shadow: 0 6px 18px rgba(79, 70, 229, 0.42) !important;
+        box-shadow: 0 6px 22px rgba(6, 182, 212, 0.55) !important;
         transform: translateY(-1.5px);
     }
     button[kind="primary"]:active {
         transform: translateY(0);
-        box-shadow: 0 2px 6px rgba(79, 70, 229, 0.2) !important;
+        box-shadow: 0 2px 10px rgba(6, 182, 212, 0.3) !important;
     }
 
     button[kind="secondary"] {
-        border-radius: 0.7rem !important;
-        border: 1px solid #e2e8f0 !important;
-        background-color: #ffffff !important;
-        color: #334155 !important;
-        font-weight: 500 !important;
-        transition: all 0.18s ease !important;
-        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.02) !important;
+        border-radius: 0.75rem !important;
+        border: 1px solid rgba(56, 189, 248, 0.30) !important;
+        background: rgba(15, 23, 42, 0.85) !important;
+        color: #e2e8f0 !important;
+        font-weight: 600 !important;
+        transition: border-color 0.15s ease, color 0.15s ease, transform 0.15s ease !important;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25) !important;
     }
     button[kind="secondary"]:hover {
-        border-color: #cbd5e1 !important;
-        background-color: #f8fafc !important;
-        color: #0f172a !important;
-        transform: translateY(-1px);
-        box-shadow: 0 3px 8px rgba(0, 0, 0, 0.04) !important;
+        border-color: #00f2fe !important;
+        background: rgba(24, 34, 53, 0.94) !important;
+        color: #38bdf8 !important;
+        transform: translateY(-1.5px);
+        box-shadow: 0 4px 14px rgba(0, 242, 254, 0.28) !important;
     }
 
     /* Starter Prompt Cards - Aesthetic Interactive Tiles */
@@ -372,87 +580,80 @@ st.markdown("""
         text-align: left;
         width: 100%;
         border-radius: 1rem !important;
-        border: 1px solid #e2e8f0 !important;
-        background: #ffffff !important;
-        padding: 1rem 1.2rem !important;
-        transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1) !important;
-        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.02) !important;
+        border: 1px solid rgba(56, 189, 248, 0.25) !important;
+        background: rgba(13, 20, 36, 0.86) !important;
+        padding: 1.1rem 1.3rem !important;
+        transition: border-color 0.15s ease, transform 0.15s ease !important;
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35) !important;
+        color: #f1f5f9 !important;
     }
     .starter-btn:hover {
-        border-color: #818cf8 !important;
-        background: #fafbff !important;
-        box-shadow: 0 8px 24px -4px rgba(99, 102, 241, 0.12) !important;
+        border-color: #00f2fe !important;
+        background: rgba(24, 34, 53, 0.92) !important;
+        box-shadow: 0 8px 24px rgba(0, 242, 254, 0.22) !important;
         transform: translateY(-2px);
     }
 
-    /* Chat Messages styling */
+    /* Chat Messages styling - Holographic Bubbles (GPU-friendly containment) */
     [data-testid="stChatMessage"] {
         border-radius: 1.15rem;
-        padding: 1.15rem 1.45rem;
-        margin-bottom: 0.95rem;
-        border: 1px solid #e2e8f0;
-        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.02);
-        transition: all 0.18s ease;
-        line-height: 1.6;
+        padding: 1.25rem 1.55rem;
+        margin-bottom: 1.1rem;
+        line-height: 1.65;
+        contain: layout style;
+        transition: border-color 0.15s ease;
     }
     [data-testid="stChatMessage"]:hover {
-        border-color: #cbd5e1;
-        box-shadow: 0 4px 14px rgba(0, 0, 0, 0.04);
+        box-shadow: 0 6px 24px rgba(0, 0, 0, 0.42);
     }
 
     /* Distinct styling for User vs Assistant bubbles */
     [data-testid="stChatMessage"]:has([data-testid="chatAvatarIcon-user"]) {
-        background-color: #f8faff;
-        border: 1px solid #e0e7ff;
-        border-left: 4px solid #6366f1;
+        background: linear-gradient(135deg, rgba(24, 34, 53, 0.92) 0%, rgba(42, 38, 92, 0.88) 100%) !important;
+        border: 1px solid rgba(99, 102, 241, 0.35) !important;
+        border-left: 4.5px solid #818cf8 !important;
+        box-shadow: 0 4px 18px rgba(0, 0, 0, 0.32) !important;
+        color: #f1f5f9 !important;
     }
     [data-testid="stChatMessage"]:has([data-testid="chatAvatarIcon-assistant"]) {
-        background-color: #ffffff;
-        border: 1px solid #e2e8f0;
-        border-left: 4px solid #10b981;
+        background: linear-gradient(135deg, rgba(13, 20, 36, 0.93) 0%, rgba(10, 24, 38, 0.90) 100%) !important;
+        border: 1px solid rgba(6, 182, 212, 0.30) !important;
+        border-left: 4.5px solid #06b6d4 !important;
+        box-shadow: 0 6px 20px rgba(0, 0, 0, 0.36) !important;
+        color: #f8fafc !important;
     }
 
-    /* Chat Input Bar - Aesthetic Floating Input with Ambient Glow */
+    /* Chat Input Bar - Quantum Cyber Console (No infinite 60fps box-shadow repaint) */
     [data-testid="stChatInput"] {
         border-radius: 1.5rem !important;
-        border: 1.5px solid #cbd5e1 !important;
-        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.04) !important;
-        background: #ffffff !important;
-        animation: promptBorderGlow 4s ease-in-out infinite !important;
-        transition: border-color 0.25s ease, box-shadow 0.25s ease;
+        border: 1.5px solid rgba(56, 189, 248, 0.50) !important;
+        background: rgba(10, 16, 30, 0.94) !important;
+        backdrop-filter: blur(8px) !important;
+        -webkit-backdrop-filter: blur(8px) !important;
+        box-shadow: 0 8px 28px rgba(0, 0, 0, 0.50), 0 0 20px rgba(56, 189, 248, 0.22), inset 0 1px 0 rgba(255, 255, 255, 0.14) !important;
+        transition: border-color 0.15s ease, box-shadow 0.15s ease !important;
     }
     [data-testid="stChatInput"]:hover {
-        border-color: #a5b4fc !important;
-        box-shadow: 0 6px 20px rgba(99, 102, 241, 0.14) !important;
+        border-color: #38bdf8 !important;
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.55), 0 0 26px rgba(56, 189, 248, 0.32) !important;
     }
     [data-testid="stChatInput"]:focus-within {
-        border-color: #6366f1 !important;
-        animation: promptBorderActive 3s ease-in-out infinite !important;
+        border-color: #00f2fe !important;
+        box-shadow: 0 8px 36px rgba(0, 0, 0, 0.60), 0 0 0 2px rgba(0, 242, 254, 0.25), 0 0 30px rgba(0, 242, 254, 0.35) !important;
+    }
+    [data-testid="stChatInput"] textarea {
+        color: #f8fafc !important;
+        padding-right: 215px !important;
+    }
+    [data-testid="stChatInput"] button[data-testid="stChatInputSubmitButton"] {
+        background: linear-gradient(135deg, #06b6d4 0%, #4f46e5 100%) !important;
+        color: #ffffff !important;
+        border-radius: 50% !important;
+        box-shadow: 0 0 14px rgba(6, 182, 212, 0.55) !important;
+        border: none !important;
     }
 
-    @keyframes promptBorderGlow {
-        0%, 100% {
-            border-color: #cbd5e1;
-            box-shadow: 0 3px 10px rgba(0, 0, 0, 0.03), 0 0 0 1px rgba(99, 102, 241, 0.06);
-        }
-        50% {
-            border-color: #818cf8;
-            box-shadow: 0 5px 16px rgba(99, 102, 241, 0.14), 0 0 10px rgba(99, 102, 241, 0.20);
-        }
-    }
-
-    @keyframes promptBorderActive {
-        0%, 100% {
-            border-color: #6366f1;
-            box-shadow: 0 0 0 3.5px rgba(99, 102, 241, 0.22), 0 6px 20px rgba(99, 102, 241, 0.15);
-        }
-        50% {
-            border-color: #06b6d4;
-            box-shadow: 0 0 0 3.5px rgba(6, 182, 212, 0.26), 0 6px 22px rgba(6, 182, 212, 0.20);
-        }
-    }
-
-    /* Command Chips Styling */
+    /* Command Chips Styling - Neon Glow Accents */
     .command-chip {
         display: inline-flex;
         align-items: center;
@@ -461,44 +662,168 @@ st.markdown("""
         border-radius: 9999px;
         font-size: 0.78rem;
         font-weight: 600;
-        background: #ffffff;
-        border: 1px solid #e2e8f0;
-        color: #475569;
-        transition: all 0.15s ease;
+        background: rgba(13, 20, 36, 0.88) !important;
+        border: 1px solid rgba(56, 189, 248, 0.25) !important;
+        color: #cbd5e1 !important;
+        transition: border-color 0.15s ease, color 0.15s ease, transform 0.15s ease;
         cursor: pointer;
     }
     .command-chip:hover {
-        border-color: #6366f1;
-        color: #4f46e5;
-        background: #f8faff;
-        transform: translateY(-1px);
-        box-shadow: 0 2px 6px rgba(99, 102, 241, 0.12);
+        border-color: #00f2fe !important;
+        color: #38bdf8 !important;
+        background: rgba(15, 23, 42, 0.95) !important;
+        transform: translateY(-1.5px);
+        box-shadow: 0 0 14px rgba(0, 242, 254, 0.32) !important;
     }
 
-    /* Tabs Styling */
+    /* Bottom Chat Model Selector Styling - Fixed Dock directly inside Chatbox Bar */
+    .st-key-chat_model_dock {
+        position: fixed !important;
+        z-index: 9999 !important;
+        width: 165px !important;
+        height: 32px !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        display: none;
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.15s ease;
+    }
+
+    .st-key-chat_model_dock.dock-aligned {
+        display: block !important;
+        opacity: 1 !important;
+        pointer-events: auto !important;
+    }
+
+    .st-key-chat_model_dock div[data-testid="stSelectbox"] {
+        margin: 0 !important;
+        padding: 0 !important;
+        width: 165px !important;
+        min-width: 120px !important;
+        max-width: 165px !important;
+        height: 32px !important;
+    }
+
+    .st-key-chat_model_dock div[data-testid="stSelectbox"] div[data-baseweb="select"] {
+        border-radius: 9999px !important;
+        border: 1.5px solid rgba(56, 189, 248, 0.45) !important;
+        background: rgba(15, 23, 42, 0.92) !important;
+        font-weight: 700 !important;
+        font-size: 0.78rem !important;
+        color: #38bdf8 !important;
+        height: 30px !important;
+        min-height: 30px !important;
+        transition: all 0.2s ease !important;
+        box-shadow: 0 0 12px rgba(6, 182, 212, 0.25) !important;
+        padding: 0 6px !important;
+    }
+
+    .st-key-chat_model_dock div[data-testid="stSelectbox"] div[data-baseweb="select"]:hover {
+        border-color: #00f2fe !important;
+        background: rgba(24, 34, 53, 0.98) !important;
+        box-shadow: 0 0 20px rgba(0, 242, 254, 0.45) !important;
+    }
+
+    .st-key-chat_model_dock div[data-testid="stSelectbox"] div[data-baseweb="select"] > div {
+        padding-top: 0 !important;
+        padding-bottom: 0 !important;
+        min-height: 28px !important;
+        height: 28px !important;
+    }
+
+    /* Dropdown Menus & Selectboxes Styling (BaseWeb Dark Theme Support) */
+    div[data-baseweb="select"] {
+        background: rgba(15, 23, 42, 0.85) !important;
+        border: 1px solid rgba(56, 189, 248, 0.30) !important;
+        border-radius: 0.75rem !important;
+        color: #f8fafc !important;
+    }
+    div[data-baseweb="popover"], div[data-baseweb="menu"] {
+        background: rgba(10, 16, 30, 0.97) !important;
+        border: 1px solid rgba(56, 189, 248, 0.35) !important;
+        box-shadow: 0 12px 32px rgba(0, 0, 0, 0.70), 0 0 18px rgba(6, 182, 212, 0.20) !important;
+        border-radius: 0.85rem !important;
+    }
+    li[role="option"] {
+        color: #cbd5e1 !important;
+        font-weight: 500 !important;
+    }
+    li[role="option"]:hover, li[aria-selected="true"] {
+        background: rgba(6, 182, 212, 0.20) !important;
+        color: #38bdf8 !important;
+        font-weight: 700 !important;
+    }
+
+    /* Tabs Styling - Futuristic Glowing Underline */
     .stTabs [data-baseweb="tab-list"] {
         gap: 1.25rem;
-        border-bottom: 1.5px solid #e2e8f0;
+        border-bottom: 1.5px solid rgba(56, 189, 248, 0.20) !important;
         padding-bottom: 0.35rem;
     }
     .stTabs [data-baseweb="tab"] {
         font-weight: 600;
         font-size: 0.92rem;
-        color: #64748b;
+        color: #94a3b8 !important;
         padding: 0.6rem 0.65rem;
         border: none !important;
         background: transparent !important;
-        transition: color 0.15s ease;
+        transition: all 0.2s ease;
         border-radius: 0.5rem;
     }
     .stTabs [data-baseweb="tab"]:hover {
-        color: #0f172a;
-        background: #f1f5f9 !important;
+        color: #38bdf8 !important;
+        background: rgba(6, 182, 212, 0.10) !important;
     }
     .stTabs [aria-selected="true"] {
-        color: #4f46e5 !important;
-        border-bottom: 2.5px solid #4f46e5 !important;
+        color: #00f2fe !important;
+        border-bottom: 2.5px solid #00f2fe !important;
         background: transparent !important;
+        text-shadow: 0 0 10px rgba(0, 242, 254, 0.40);
+    }
+
+    /* Expanders & Accordions */
+    [data-testid="stExpander"] {
+        background: rgba(13, 20, 36, 0.84) !important;
+        border: 1px solid rgba(56, 189, 248, 0.22) !important;
+        border-radius: 0.95rem !important;
+        margin-bottom: 0.85rem !important;
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.30) !important;
+    }
+    [data-testid="stExpander"] summary {
+        color: #e2e8f0 !important;
+        font-weight: 600 !important;
+    }
+    [data-testid="stExpander"]:hover {
+        border-color: rgba(56, 189, 248, 0.45) !important;
+    }
+
+    /* Text Inputs & Textareas */
+    [data-testid="stTextInput"] input, [data-testid="stTextArea"] textarea {
+        background: rgba(15, 23, 42, 0.80) !important;
+        border: 1px solid rgba(56, 189, 248, 0.30) !important;
+        color: #f8fafc !important;
+        border-radius: 0.75rem !important;
+    }
+    [data-testid="stTextInput"] input:focus, [data-testid="stTextArea"] textarea:focus {
+        border-color: #00f2fe !important;
+        box-shadow: 0 0 12px rgba(0, 242, 254, 0.30) !important;
+    }
+
+    /* Quantum Orb Animation */
+    @keyframes quantumPulse {
+        0%, 100% {
+            box-shadow: 0 0 25px rgba(6, 182, 212, 0.50), 0 0 50px rgba(147, 51, 234, 0.30);
+            transform: scale(1);
+        }
+        50% {
+            box-shadow: 0 0 45px rgba(6, 182, 212, 0.75), 0 0 75px rgba(147, 51, 234, 0.50);
+            transform: scale(1.03);
+        }
+    }
+    @keyframes orbSpin {
+        from { transform: rotate(0deg); }
+        to { transform: rotate(360deg); }
     }
 
     /* Thinking & Analysing Animation */
@@ -904,14 +1229,14 @@ def ensure_background_engines():
 ensure_background_engines()
 
 # High-Performance Cached Engine Status
-@st.cache_data(ttl=8)
+@st.cache_data(ttl=30)
 def get_cached_engine_status():
-    o_online = run_async(ollama_service.is_server_reachable(timeout=3.0))
-    o_health = run_async(ollama_service.check_health(timeout=3.0)) if o_online else {"reachable": False}
+    o_health = run_async(ollama_service.check_health(timeout=2.0))
+    o_online = bool(o_health.get("reachable", False))
     m_list = run_async(ollama_service.list_models()) if o_online else []
     return o_online, o_health, m_list
 
-@st.cache_data(ttl=8)
+@st.cache_data(ttl=30)
 def get_cached_models():
     _, _, m_list = get_cached_engine_status()
     return m_list
@@ -919,32 +1244,40 @@ def get_cached_models():
 ollama_online, ollama_health, models_list = get_cached_engine_status()
 model_names = [m.name for m in models_list] if models_list else ["gemma4:12b"]
 
-# User Preferences Persistence
+# User Preferences Persistence (batched & direct sync SQLite WAL to prevent thread/connection churn)
 DEFAULT_SYSTEM_INSTRUCTION = settings.default_system_instruction
 
-def get_preference(key: str, default: str = "") -> str:
+@st.cache_data(ttl=20, show_spinner=False)
+def get_all_preferences() -> Dict[str, str]:
     try:
-        row = run_async(db.fetchone("SELECT value FROM user_preferences WHERE key = ?", (key,)))
-        return row["value"] if row and row["value"] is not None else default
+        rows = db._fetchall_sync("SELECT key, value FROM user_preferences")
+        return {r["key"]: r["value"] for r in rows if r.get("value") is not None}
     except Exception:
-        return default
+        return {}
+
+def get_preference(key: str, default: str = "") -> str:
+    prefs = get_all_preferences()
+    val = prefs.get(key)
+    return val if val is not None else default
 
 def set_preference(key: str, value: str) -> None:
     try:
-        run_async(db.execute(
+        db._execute_sync(
             """
             INSERT INTO user_preferences (key, value, updated_at)
             VALUES (?, ?, CURRENT_TIMESTAMP)
             ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP
             """,
             (key, str(value))
-        ))
+        )
+        get_all_preferences.clear()
     except Exception:
         pass
 
 # ---------------------------------------------------------
 # CONVERSATION & CHAT HISTORY HELPERS (ChatGPT & Gemini Style)
 # ---------------------------------------------------------
+@st.cache_data(ttl=15, show_spinner=False)
 def get_conversations(limit: int = 50, user_id: Optional[str] = None) -> List[Dict[str, Any]]:
     """
     Fetches conversations strictly isolated to the specified user (Rule 2 & Rule 3).
@@ -953,7 +1286,7 @@ def get_conversations(limit: int = 50, user_id: Optional[str] = None) -> List[Di
     if not user_id:
         return []
     try:
-        rows = run_async(db.fetchall(
+        rows = db._fetchall_sync(
             """
             SELECT c.*, COUNT(m.id) AS msg_count
             FROM conversations c
@@ -964,7 +1297,7 @@ def get_conversations(limit: int = 50, user_id: Optional[str] = None) -> List[Di
             LIMIT ?
             """,
             (user_id, limit)
-        ))
+        )
         return [dict(r) for r in rows]
     except Exception:
         return []
@@ -975,24 +1308,25 @@ def create_new_conversation(title: str = "New Chat", model: str = "", user_id: O
     m_name = model or "gemma4:12b"
     u_id = user_id or ""
     try:
-        run_async(db.execute(
+        db._execute_sync(
             """
             INSERT INTO conversations (id, title, model, system_prompt, temperature, context_length, created_at, updated_at, user_id)
             VALUES (?, ?, ?, '', 0.7, 8192, ?, ?, ?)
             """,
             (conv_id, title, m_name, now, now, u_id)
-        ))
+        )
     except Exception:
         try:
-            run_async(db.execute(
+            db._execute_sync(
                 """
                 INSERT INTO conversations (id, title, model, system_prompt, temperature, context_length, created_at, updated_at)
                 VALUES (?, ?, ?, '', 0.7, 8192, ?, ?)
                 """,
                 (conv_id, title, m_name, now, now)
-            ))
+            )
         except Exception:
             pass
+    get_conversations.clear()
     return conv_id
 
 def load_conversation_messages(conv_id: str, user_id: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -1002,16 +1336,16 @@ def load_conversation_messages(conv_id: str, user_id: Optional[str] = None) -> L
     """
     try:
         if user_id:
-            check_owner = run_async(db.fetchone(
+            check_owner = db._fetchone_sync(
                 "SELECT id FROM conversations WHERE id = ? AND user_id = ?",
                 (conv_id, user_id)
-            ))
+            )
             if not check_owner:
                 return []
-        rows = run_async(db.fetchall(
+        rows = db._fetchall_sync(
             "SELECT * FROM messages WHERE conversation_id = ? ORDER BY created_at ASC",
             (conv_id,)
-        ))
+        )
         msgs = []
         for r in rows:
             imgs = []
@@ -1035,17 +1369,18 @@ def save_chat_message(conv_id: str, role: str, content: str, images: Optional[Li
     now = datetime.datetime.now().isoformat()
     imgs_json = json.dumps(images or [])
     try:
-        run_async(db.execute(
+        db._execute_sync(
             """
             INSERT INTO messages (id, conversation_id, role, content, images_json, created_at)
             VALUES (?, ?, ?, ?, ?, ?)
             """,
             (msg_id, conv_id, role, content, imgs_json, now)
-        ))
-        run_async(db.execute(
+        )
+        db._execute_sync(
             "UPDATE conversations SET updated_at = ? WHERE id = ?",
             (now, conv_id)
-        ))
+        )
+        get_conversations.clear()
     except Exception:
         pass
     return msg_id
@@ -1054,34 +1389,39 @@ def delete_conversation(conv_id: str, user_id: Optional[str] = None) -> None:
     """Deletes conversation and associated messages, isolated strictly to owning user."""
     try:
         if user_id:
-            run_async(db.execute(
+            db._execute_sync(
                 "DELETE FROM messages WHERE conversation_id IN (SELECT id FROM conversations WHERE id = ? AND user_id = ?)",
                 (conv_id, user_id)
-            ))
-            run_async(db.execute(
+            )
+            db._execute_sync(
                 "DELETE FROM conversations WHERE id = ? AND user_id = ?",
                 (conv_id, user_id)
-            ))
+            )
         else:
-            run_async(db.execute("DELETE FROM messages WHERE conversation_id = ?", (conv_id,)))
-            run_async(db.execute("DELETE FROM conversations WHERE id = ?", (conv_id,)))
+            db._execute_sync("DELETE FROM messages WHERE conversation_id = ?", (conv_id,))
+            db._execute_sync("DELETE FROM conversations WHERE id = ?", (conv_id,))
+        get_conversations.clear()
     except Exception:
         pass
 
 def update_conversation_title(conv_id: str, new_title: str) -> None:
     now = datetime.datetime.now().isoformat()
     try:
-        run_async(db.execute(
+        db._execute_sync(
             "UPDATE conversations SET title = ?, updated_at = ? WHERE id = ?",
             (new_title, now, conv_id)
-        ))
+        )
+        get_conversations.clear()
     except Exception:
         pass
 
 # Load Stored Memories
+@st.cache_data(ttl=20, show_spinner=False)
 def load_memories() -> List[Dict[str, Any]]:
-    rows = run_async(db.fetchall("SELECT * FROM user_memories ORDER BY updated_at DESC"))
-    return rows
+    try:
+        return db._fetchall_sync("SELECT * FROM user_memories ORDER BY updated_at DESC")
+    except Exception:
+        return []
 
 stored_memories = load_memories()
 active_memories = [m for m in stored_memories if m["enabled"]]
@@ -1102,7 +1442,11 @@ if "selected_model_val" not in st.session_state:
     if saved_model and saved_model in model_names:
         st.session_state["selected_model_val"] = saved_model
     else:
-        st.session_state["selected_model_val"] = model_names[0] if model_names else "gemma4:12b"
+        preferred_fast = next(
+            (m for m in ["gemma4:12b", "gemma4:e4b", "llama3.2:latest", "qwen2.5:14b"] if m in model_names),
+            model_names[0] if model_names else "gemma4:12b"
+        )
+        st.session_state["selected_model_val"] = preferred_fast
 
 if "temperature_val" not in st.session_state:
     st.session_state["temperature_val"] = min(max(saved_temp, 0.0), 1.0)
@@ -1135,25 +1479,29 @@ def render_login_portal():
       5. Use this excel sheet as the database for user management
     """
     st.markdown("""
-    <div style="text-align: center; margin-top: 2rem; margin-bottom: 1.5rem;">
-        <div style="display: inline-flex; background: linear-gradient(135deg, #4f46e5 0%, #6366f1 100%); color: white; width: 60px; height: 60px; border-radius: 18px; align-items: center; justify-content: center; font-size: 2rem; box-shadow: 0 4px 14px rgba(79, 70, 229, 0.35); margin-bottom: 0.85rem;">
-            ⚡
+    <div style="text-align: center; margin-top: 1.5rem; margin-bottom: 1.25rem;">
+        <div style="display: inline-block; margin-bottom: 0.85rem;">
+            <img src="/app/static/ai_core_orb_sm.jpg" style="width: 76px; height: 76px; border-radius: 50%; box-shadow: 0 0 28px rgba(0, 242, 254, 0.50), 0 0 50px rgba(147, 51, 234, 0.30); border: 2px solid rgba(56, 189, 248, 0.5); object-fit: cover;">
         </div>
-        <h1 style="font-weight: 800; color: #0f172a; margin: 0; font-size: 1.85rem; letter-spacing: -0.02em;">Local AI Workbench</h1>
-        <p style="color: #64748b; font-size: 0.95rem; margin-top: 0.4rem; font-weight: 500;">Enterprise Multi-User Studio • Private & Air-Gapped</p>
+        <h1 style="font-weight: 800; color: #f8fafc; margin: 0; font-size: 1.95rem; font-family: 'JetBrains Mono', monospace; letter-spacing: -0.02em;">
+            ISOTOPE <span style="background: linear-gradient(135deg, #00f2fe 0%, #38bdf8 50%, #c084fc 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">- AI COMPANION</span>
+        </h1>
+        <p style="color: #94a3b8; font-size: 0.92rem; margin-top: 0.35rem; font-weight: 500;">
+            Neural Multi-User Studio • 100% Private & Air-Gapped Quantum Engine
+        </p>
     </div>
     """, unsafe_allow_html=True)
 
     _, col_form, _ = st.columns([1, 1.4, 1])
     with col_form:
         st.markdown("""
-        <div style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 14px; padding: 1.25rem 1.5rem 0.5rem; box-shadow: 0 4px 16px -2px rgba(0, 0, 0, 0.05); margin-bottom: 1rem;">
-            <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.25rem;">
-                <span style="font-size: 1.2rem;">🔐</span>
-                <span style="font-weight: 700; font-size: 1.15rem; color: #0f172a;">Account Sign In</span>
+        <div style="background: rgba(13, 20, 36, 0.88); border: 1px solid rgba(56, 189, 248, 0.30); border-radius: 16px; padding: 1.35rem 1.6rem 0.6rem; box-shadow: 0 8px 28px rgba(0, 0, 0, 0.48), inset 0 1px 0 rgba(255, 255, 255, 0.1); margin-bottom: 1rem;">
+            <div style="display: flex; align-items: center; gap: 0.55rem; margin-bottom: 0.25rem;">
+                <span style="font-size: 1.25rem;">🔐</span>
+                <span style="font-weight: 800; font-size: 1.15rem; color: #f8fafc; font-family: 'JetBrains Mono', monospace;">Account Sign In</span>
             </div>
-            <div style="font-size: 0.82rem; color: #64748b; margin-bottom: 0.5rem;">
-                Sign in with credentials configured in <code style="color: #4f46e5;">Account Management.xlsx</code>.
+            <div style="font-size: 0.82rem; color: #94a3b8; margin-bottom: 0.5rem;">
+                Authenticate credentials configured in <code style="color: #38bdf8; background: rgba(56, 189, 248, 0.12); padding: 2px 6px; border-radius: 4px;">Account Management.xlsx</code>.
             </div>
         </div>
         """, unsafe_allow_html=True)
@@ -1162,7 +1510,7 @@ def render_login_portal():
             default_user = st.query_params.get("user", "")
             uname_val = st.text_input("Username", value=default_user, placeholder="Enter username (e.g. achakrabort4, crakha1, admin)", key="input_uname")
             pass_val = st.text_input("Password", type="password", placeholder="Enter your password", key="input_pword")
-            login_btn = st.form_submit_button("Sign In to Workbench", type="primary", use_container_width=True)
+            login_btn = st.form_submit_button("Sign In to Isotope", type="primary", use_container_width=True)
 
             if login_btn:
                 if not uname_val.strip() or not pass_val.strip():
@@ -1225,37 +1573,37 @@ curr_uname = current_user.get("username", "")
 with st.sidebar:
     st.markdown("""
     <div style="display: flex; align-items: center; gap: 0.65rem; margin-bottom: 0.75rem;">
-        <div style="background: linear-gradient(135deg, #4f46e5 0%, #6366f1 100%); color: white; width: 34px; height: 34px; border-radius: 9px; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 1.15rem; box-shadow: 0 2px 6px rgba(79, 70, 229, 0.25);">
+        <div style="background: linear-gradient(135deg, #00f2fe 0%, #4f46e5 100%); color: white; width: 34px; height: 34px; border-radius: 9px; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 1.15rem; box-shadow: 0 0 14px rgba(0, 242, 254, 0.45);">
             ⚡
         </div>
         <div>
-            <div style="font-weight: 800; font-size: 1.05rem; color: #0f172a; line-height: 1.15;">AI Workbench</div>
-            <div style="font-size: 0.73rem; color: #64748b; font-weight: 500;">Private • Offline Studio</div>
+            <div style="font-weight: 800; font-size: 1.05rem; color: #f8fafc; line-height: 1.15; font-family: 'JetBrains Mono', monospace;">Isotope</div>
+            <div style="font-size: 0.73rem; color: #94a3b8; font-weight: 500;">AI Companion • Offline</div>
         </div>
     </div>
     """, unsafe_allow_html=True)
 
     # User Profile & Workspace Card
     role_badge = "👑 Admin" if is_admin else "👤 User"
-    badge_bg = "#fef3c7" if is_admin else "#eff6ff"
-    badge_color = "#b45309" if is_admin else "#1d4ed8"
+    badge_bg = "rgba(245, 158, 11, 0.20)" if is_admin else "rgba(56, 189, 248, 0.18)"
+    badge_color = "#fbbf24" if is_admin else "#38bdf8"
     user_initials = "".join([part[0].upper() for part in current_user.get("name", "User").split()[:2]]) or "U"
 
     st.markdown(f"""
-    <div style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 0.75rem 0.85rem; margin-bottom: 0.65rem; box-shadow: 0 2px 8px rgba(0,0,0,0.03);">
+    <div style="background: rgba(13, 20, 36, 0.86); border: 1px solid rgba(56, 189, 248, 0.25); border-radius: 12px; padding: 0.75rem 0.85rem; margin-bottom: 0.65rem; box-shadow: 0 4px 14px rgba(0,0,0,0.35);">
         <div style="display: flex; align-items: center; gap: 0.65rem;">
-            <div style="width: 36px; height: 36px; border-radius: 10px; background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%); color: white; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 0.85rem; box-shadow: 0 2px 6px rgba(79, 70, 229, 0.25); flex-shrink: 0;">
+            <div style="width: 36px; height: 36px; border-radius: 10px; background: linear-gradient(135deg, #06b6d4 0%, #7c3aed 100%); color: white; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 0.85rem; box-shadow: 0 0 10px rgba(6, 182, 212, 0.35); flex-shrink: 0;">
                 {user_initials}
             </div>
             <div style="flex-grow: 1; min-width: 0;">
                 <div style="display: flex; align-items: center; justify-content: space-between; gap: 4px;">
-                    <span style="font-weight: 700; font-size: 0.86rem; color: #0f172a; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">{current_user.get('name', 'User')}</span>
-                    <span style="background: {badge_bg}; color: {badge_color}; font-size: 0.68rem; font-weight: 700; padding: 2px 6px; border-radius: 5px; flex-shrink: 0;">{role_badge}</span>
+                    <span style="font-weight: 700; font-size: 0.86rem; color: #f8fafc; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">{current_user.get('name', 'User')}</span>
+                    <span style="background: {badge_bg}; color: {badge_color}; border: 1px solid {badge_color}44; font-size: 0.68rem; font-weight: 700; padding: 2px 6px; border-radius: 5px; flex-shrink: 0;">{role_badge}</span>
                 </div>
-                <div style="font-size: 0.72rem; color: #64748b; margin-top: 1px; display: flex; align-items: center; gap: 4px;">
+                <div style="font-size: 0.72rem; color: #94a3b8; margin-top: 1px; display: flex; align-items: center; gap: 4px;">
                     <span>@{current_user.get('username', 'user')}</span>
                     <span>•</span>
-                    <span style="font-family: monospace; color: #475569; font-size: 0.68rem;">workspace/{current_user.get('username', 'user')}</span>
+                    <span style="font-family: monospace; color: #64748b; font-size: 0.68rem;">workspace/{current_user.get('username', 'user')}</span>
                 </div>
             </div>
         </div>
@@ -1392,8 +1740,8 @@ with st.sidebar:
                 run_async(ollama_service.start_service())
                 st.rerun()
 
-    # Live Auto Load Balancer Telemetry Card (Real-time 2s auto-refresh fragment)
-    @st.fragment(run_every="4s")
+    # Live Auto Load Balancer Telemetry Card (Low-overhead 12s auto-refresh fragment)
+    @st.fragment(run_every="12s")
     def render_sidebar_balancer_widget():
         try:
             live_tele = get_live_telemetry(force_refresh=False)
@@ -1415,14 +1763,14 @@ with st.sidebar:
                 gpu_line += f" <span style='color: #059669;'>({lb_gpu_util:.0f}% GPU)</span>"
 
             st.markdown(f"""
-            <div style="margin-top: 0.65rem; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 0.5rem 0.65rem;">
-                <div style="display: flex; justify-content: space-between; align-items: center; font-size: 0.74rem; font-weight: 700; color: #0f172a; margin-bottom: 3px;">
+            <div style="margin-top: 0.65rem; background: rgba(13, 20, 36, 0.86); border: 1px solid rgba(56, 189, 248, 0.25); border-radius: 10px; padding: 0.55rem 0.75rem; box-shadow: 0 4px 14px rgba(0,0,0,0.32);">
+                <div style="display: flex; justify-content: space-between; align-items: center; font-size: 0.74rem; font-weight: 700; color: #f8fafc; margin-bottom: 3px;">
                     <span>⚡ Auto Balancer</span>
                     <span style="color: {lb_tier_color}; font-weight: 700;">{lb_tier_badge}</span>
                 </div>
-                <div style="font-size: 0.71rem; color: #64748b; line-height: 1.35;">
-                    CPU: <b>{lb_cpu.get('percent_used', 0.0)}%</b> • RAM: <b>{lb_ram_used}/{lb_mem.get('total_gb', 0)} GB</b>{gpu_line}<br>
-                    Allocation: <b>{lb_threads} Cores</b> • Safe Ctx: <b>{lb_safe_ctx} tok</b>
+                <div style="font-size: 0.71rem; color: #94a3b8; line-height: 1.35;">
+                    CPU: <b style="color: #f8fafc;">{lb_cpu.get('percent_used', 0.0)}%</b> • RAM: <b style="color: #f8fafc;">{lb_ram_used}/{lb_mem.get('total_gb', 0)} GB</b>{gpu_line}<br>
+                    Allocation: <b style="color: #38bdf8;">{lb_threads} Cores</b> • Safe Ctx: <b style="color: #c084fc;">{lb_safe_ctx} tok</b>
                 </div>
             </div>
             """, unsafe_allow_html=True)
@@ -1494,10 +1842,11 @@ def render_memory_hub_section():
             if st.button(f"Import {p['tool'].title()}", key=f"import_preset_{p['tool']}", use_container_width=True):
                 new_id = str(uuid.uuid4())
                 now = datetime.datetime.now().isoformat()
-                run_async(db.execute(
+                db._execute_sync(
                     "INSERT INTO user_memories (id, key, content, source_tool, category, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 1, ?, ?)",
                     (new_id, f"{p['tool'].title()} Instructions", p["content"], p["tool"], "instructions", now, now)
-                ))
+                )
+                load_memories.clear()
                 st.toast(f"Imported {p['name']} successfully!", icon="🧠")
                 st.rerun()
 
@@ -1520,10 +1869,11 @@ def render_memory_hub_section():
             if submit_mem and new_key and new_content:
                 new_id = str(uuid.uuid4())
                 now = datetime.datetime.now().isoformat()
-                run_async(db.execute(
+                db._execute_sync(
                     "INSERT INTO user_memories (id, key, content, source_tool, category, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 1, ?, ?)",
                     (new_id, new_key.strip(), new_content.strip(), new_source, new_cat, now, now)
-                ))
+                )
+                load_memories.clear()
                 st.toast(f"Added memory: {new_key}", icon="✅")
                 st.rerun()
 
@@ -1544,11 +1894,13 @@ def render_memory_hub_section():
                     toggle_label = "Mute" if mem["enabled"] else "Activate"
                     if st.button(toggle_label, key=f"tog_{mem['id']}", use_container_width=True):
                         new_state = 0 if mem["enabled"] else 1
-                        run_async(db.execute("UPDATE user_memories SET enabled = ?, updated_at = ? WHERE id = ?", (new_state, datetime.datetime.now().isoformat(), mem["id"])))
+                        db._execute_sync("UPDATE user_memories SET enabled = ?, updated_at = ? WHERE id = ?", (new_state, datetime.datetime.now().isoformat(), mem["id"]))
+                        load_memories.clear()
                         st.rerun()
                 with col_del:
                     if st.button("Delete", key=f"del_mem_{mem['id']}", use_container_width=True):
-                        run_async(db.execute("DELETE FROM user_memories WHERE id = ?", (mem["id"],)))
+                        db._execute_sync("DELETE FROM user_memories WHERE id = ?", (mem["id"],))
+                        load_memories.clear()
                         st.rerun()
 
 
@@ -1734,7 +2086,7 @@ def render_diagnostics_section():
     st.markdown(accel_box_html, unsafe_allow_html=True)
 
     # 2. Real-Time Resource Telemetry & Auto-Balancing Governor
-    @st.fragment(run_every="3s")
+    @st.fragment(run_every="6s")
     def render_live_resource_governor():
         live_tele = get_live_telemetry(force_refresh=False)
         lb_prof = get_current_load_profile(live_tele)
@@ -1877,8 +2229,9 @@ def render_diagnostics_section():
             st.session_state["multi_pull_input"] = ""
             st.rerun()
 
-        # Background Download Monitor with Multi-Job Tracking & Real-Time Controls
-        @st.fragment(run_every="1s")
+        # Background Download Monitor (polls at 2s only while active downloads exist)
+        _dl_poll_interval = "2s" if model_download_manager.get_active_jobs() else None
+        @st.fragment(run_every=_dl_poll_interval)
         def render_download_progress_monitor():
             all_jobs = model_download_manager.get_all_active_or_recent_jobs()
             if not all_jobs:
@@ -2001,12 +2354,12 @@ def render_diagnostics_section():
         render_download_progress_monitor()
 
     with col_d2:
-        st.markdown("##### 🛡️ AI Workbench Engine Health")
+        st.markdown("##### 🛡️ Isotope Engine Health")
         st.write(f"**Chat & Inference:** 🟢 Online (`{selected_model}`)")
         st.write(f"**Web Search Engine:** {'🟢 Online & Active' if settings.enable_web_search else '🟠 Offline / Privacy Mode'}")
         st.write(f"**Active Workspace:** `{settings.workspace_root.name}`")
         st.write(f"**Local Database:** `Connected (SQLite WAL Mode)`")
-        st.info("💡 Workbench is optimized for high-speed local inference, autonomous coding, report synthesis, and live web search.")
+        st.info("💡 Isotope is optimized for high-speed local inference, autonomous coding, report synthesis, and live web search.")
 
     st.markdown("---")
     st.markdown("##### 💾 Storage & Data Persistence")
@@ -2032,20 +2385,23 @@ else:
 
 brand_banner_html = (
     '<div class="brand-container">'
+    '<div style="display: flex; align-items: center; gap: 0.85rem;">'
+    '<img src="/app/static/ai_core_orb_sm.jpg" style="width: 38px; height: 38px; border-radius: 50%; box-shadow: 0 0 12px rgba(0, 242, 254, 0.45); border: 1.5px solid rgba(56, 189, 248, 0.5); object-fit: cover;">'
     '<div>'
     '<div class="brand-title">'
-    '<span>⚡ LOCAL AI WORKBENCH</span>'
+    '<span style="background: linear-gradient(135deg, #38bdf8 0%, #818cf8 50%, #c084fc 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; font-weight: 800; letter-spacing: -0.01em; white-space: nowrap;">ISOTOPE - AI COMPANION</span>'
     '<span class="brand-pill pill-success">100% Private</span>'
     f'<span class="brand-pill pill-indigo">{selected_model}</span>'
     f'{active_dl_html}'
     '</div>'
-    '<p style="font-size: 0.8rem; color: #64748b; margin: 0.25rem 0 0 0;">'
-    'Local-first AI workstation for private reasoning, coding agents, executive reports, web search, and memory sync.'
+    '<p style="font-size: 0.8rem; color: #94a3b8; margin: 0.2rem 0 0 0;">'
+    'Private AI companion with air-gapped reasoning, autonomous coding agents, executive reports, and memory sync.'
     '</p>'
     '</div>'
-    '<div style="display: flex; gap: 0.5rem; align-items: center;">'
+    '</div>'
+    '<div style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">'
     f'<span class="brand-pill pill-indigo">🧠 {len(active_memories)} Memories Active</span>'
-    f'<span class="brand-pill pill-success">{"🟢 Ready" if ollama_online else "🔴 Offline"}</span>'
+    f'<span class="brand-pill pill-success">{"🟢 Neural Core Ready" if ollama_online else "🔴 Core Offline"}</span>'
     '</div>'
     '</div>'
 )
@@ -2221,28 +2577,11 @@ if selected_page in ["💬 Chat", "💬 All-in-One Studio", "Chat", "All-in-One 
     active_conv_meta = next((c for c in all_conversations if c["id"] == st.session_state["active_conv_id"]), None)
     active_title = active_conv_meta["title"] if active_conv_meta else "New Chat"
 
-    chat_header_c1, chat_header_c2, chat_header_c3 = st.columns([3.2, 1.8, 1.0])
+    chat_header_c1, chat_header_c2 = st.columns([5.0, 1.0])
     with chat_header_c1:
         st.markdown(f"### 💬 {active_title}")
         st.caption(f"Session `{st.session_state['active_conv_id'][:8]}` • {len(st.session_state.messages)} msgs • Active: `{selected_model}`")
     with chat_header_c2:
-        def on_studio_model_change():
-            new_m = st.session_state.get("studio_model_select")
-            if new_m:
-                set_preference("selected_model", new_m)
-                st.session_state["selected_model_val"] = new_m
-
-        cur_idx = model_names.index(selected_model) if selected_model in model_names else 0
-        st.selectbox(
-            "Active Model Switcher",
-            options=model_names,
-            index=cur_idx,
-            key="studio_model_select",
-            on_change=on_studio_model_change,
-            label_visibility="collapsed",
-            help="Switch active local model directly in chat"
-        )
-    with chat_header_c3:
         with st.popover("⚙️ Options"):
             new_title = st.text_input("Rename Chat", value=active_title, key="rename_chat_input")
             if st.button("Save Title", use_container_width=True):
@@ -2250,17 +2589,23 @@ if selected_page in ["💬 Chat", "💬 All-in-One Studio", "Chat", "All-in-One 
                     update_conversation_title(st.session_state["active_conv_id"], new_title.strip())
                     st.rerun()
             if st.button("🗑️ Clear Messages", use_container_width=True):
-                run_async(db.execute("DELETE FROM messages WHERE conversation_id = ?", (st.session_state["active_conv_id"],)))
+                db._execute_sync("DELETE FROM messages WHERE conversation_id = ?", (st.session_state["active_conv_id"],))
+                get_conversations.clear()
                 st.session_state["messages"] = []
                 st.rerun()
 
     # Display empty state starter cards if no messages
     if not st.session_state.messages:
         st.markdown("""
-        <div style="text-align: center; padding: 2rem 1rem;">
-            <h3 style="font-weight: 800; color: #0f172a; margin-bottom: 0.5rem;">How can I assist your local workspace today?</h3>
-            <p style="font-size: 0.85rem; color: #64748b; max-width: 500px; margin: 0 auto 1.5rem auto;">
-                All processing happens locally on your computer. Private, high-speed, and connected to your external AI tool memories.
+        <div style="text-align: center; padding: 1.6rem 1rem 1.1rem 1rem;">
+            <div style="position: relative; display: inline-block; margin-bottom: 1rem;">
+                <img src="/app/static/ai_core_orb_sm.jpg" style="width: 82px; height: 82px; border-radius: 50%; box-shadow: 0 0 28px rgba(0, 242, 254, 0.48), 0 0 50px rgba(147, 51, 234, 0.30); border: 2px solid rgba(56, 189, 248, 0.45); object-fit: cover;">
+            </div>
+            <h2 style="font-weight: 800; color: #f8fafc; margin-bottom: 0.35rem; font-family: 'JetBrains Mono', monospace; letter-spacing: -0.02em;">
+                ISOTOPE <span style="background: linear-gradient(135deg, #00f2fe 0%, #38bdf8 50%, #c084fc 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">READY</span>
+            </h2>
+            <p style="font-size: 0.88rem; color: #94a3b8; max-width: 520px; margin: 0 auto 1.3rem auto; line-height: 1.55;">
+                Local-first private workstation. Zero cloud telemetry. Connected to autonomous coding agents, live web search, and active memory sync.
             </p>
         </div>
         """, unsafe_allow_html=True)
@@ -2335,13 +2680,32 @@ if selected_page in ["💬 Chat", "💬 All-in-One Studio", "Chat", "All-in-One 
             else:
                 st.markdown(msg["content"], unsafe_allow_html=True)
 
-    # Sleek Model Info & Quick Command Chips Bar
-    col_cmd_left, col_cmd_right = st.columns([3.8, 6.2])
+    # Dockable Chatbox Model Selector Container (Auto-docked directly inside st.chat_input via JS)
+    def on_chat_model_change():
+        new_m = st.session_state.get("chat_model_selector")
+        if new_m:
+            set_preference("selected_model", new_m)
+            st.session_state["selected_model_val"] = new_m
+            st.session_state["settings_model_select"] = new_m
+
+    cur_idx = model_names.index(selected_model) if selected_model in model_names else 0
+    with st.container(key="chat_model_dock"):
+        st.selectbox(
+            "Active Model",
+            options=model_names,
+            index=cur_idx,
+            key="chat_model_selector",
+            on_change=on_chat_model_change,
+            label_visibility="collapsed",
+            help="Switch active AI model directly at the chatbox"
+        )
+
+    # Quick Command Chips Bar
+    col_cmd_left, col_cmd_right = st.columns([2.5, 7.5])
     with col_cmd_left:
         st.markdown(
-            f'<div style="display: flex; align-items: center; gap: 0.5rem; padding-top: 5px;">'
-            f'<span class="command-chip" style="background: #eef2ff; color: #4f46e5; border-color: #c7d2fe;">🤖 <b>{selected_model}</b></span>'
-            f'<span class="command-chip" style="font-size: 0.72rem; color: #64748b;">Context: {context_tokens}</span>'
+            f'<div style="padding-top: 5px;">'
+            f'<span class="command-chip" style="font-size: 0.72rem; color: #64748b; white-space: nowrap;">Context: {context_tokens}</span>'
             f'</div>',
             unsafe_allow_html=True
         )
@@ -2450,7 +2814,7 @@ if selected_page in ["💬 Chat", "💬 All-in-One Studio", "Chat", "All-in-One 
         with st.chat_message("assistant"):
             # Notice if user types deprecated /image command
             if prompt_to_use.strip().startswith("/image"):
-                response_text = "ℹ️ **Image generation has been removed.** The workbench is focused on conversational Chat, Autonomous Coding (`/code`), Executive Reports (`/report`), and Live Web Search (`/search`)."
+                response_text = "ℹ️ **Image generation has been removed.** Isotope is focused on conversational Chat, Autonomous Coding (`/code`), Executive Reports (`/report`), and Live Web Search (`/search`)."
                 st.info(response_text)
                 save_chat_message(st.session_state["active_conv_id"], "assistant", response_text)
                 st.session_state.messages.append({"role": "assistant", "content": response_text})
@@ -2652,8 +3016,9 @@ if selected_page in ["💬 Chat", "💬 All-in-One Studio", "Chat", "All-in-One 
                     src = m.get("source_tool", "custom").upper()
                     memory_lines.append(f"- [{src}] {m['key']}: {m['content']}")
                 
-                # Ensure current system instruction is synced in database
-                set_preference("system_instruction", system_instruction)
+                # Only persist system instruction if it changed from saved DB preference
+                if system_instruction != saved_sys_inst:
+                    set_preference("system_instruction", system_instruction)
                 
                 effective_system = system_instruction
                 if memory_lines:
@@ -2714,33 +3079,111 @@ if selected_page in ["💬 Chat", "💬 All-in-One Studio", "Chat", "All-in-One 
                     )
 
                     thinking_parts = []
+                    full_response_parts = []
 
                     # Phase 3: Token streaming from Ollama with real-time reasoning animation
-                    async def stream_to_ui():
-                        async for event in ollama_service.chat_stream_detailed(
-                            model=selected_model,
-                            messages=ollama_messages,
-                            temperature=temperature,
-                            context_length=context_tokens
-                        ):
-                            if event["type"] == "thinking":
-                                thinking_parts.append(event["text"])
+                    # Uses a thread-safe Queue so all UI placeholder updates occur strictly on the main thread
+                    stream_q = queue.Queue()
+                    stream_done = object()
+                    stream_err = []
+
+                    async def _stream_producer():
+                        try:
+                            async for event in ollama_service.chat_stream_detailed(
+                                model=selected_model,
+                                messages=ollama_messages,
+                                temperature=temperature,
+                                context_length=context_tokens
+                            ):
+                                stream_q.put(event)
+                        except Exception as ex:
+                            stream_err.append(ex)
+                        finally:
+                            stream_q.put(stream_done)
+
+                    producer_thread = threading.Thread(
+                        target=lambda: asyncio.run(_stream_producer()),
+                        daemon=True
+                    )
+                    producer_thread.start()
+
+                    last_ui_flush = 0.0
+                    ui_flush_interval = 0.06  # Throttle UI markdown renders to ~16 FPS to avoid WebSocket/React saturation
+                    dirty_phase = None
+
+                    while True:
+                        try:
+                            ev = stream_q.get(timeout=0.03)
+                        except queue.Empty:
+                            now_ts = time.perf_counter()
+                            if dirty_phase and (now_ts - last_ui_flush) >= ui_flush_interval:
+                                if dirty_phase == "content" and full_response_parts:
+                                    response_placeholder.markdown("".join(full_response_parts) + "▌")
+                                elif dirty_phase == "thinking" and thinking_parts:
+                                    recent_th = "".join(thinking_parts)[-90:].replace("\n", " ").strip()
+                                    response_placeholder.markdown(
+                                        render_thinking_badge("thinking", f"Reasoning ({selected_model}): {recent_th}..."),
+                                        unsafe_allow_html=True
+                                    )
+                                last_ui_flush = now_ts
+                                dirty_phase = None
+                            if not producer_thread.is_alive() and stream_q.empty():
+                                break
+                            continue
+
+                        if ev is stream_done:
+                            break
+
+                        ev_type = ev.get("type")
+                        if ev_type == "thinking":
+                            thinking_parts.append(ev.get("text", ""))
+                            dirty_phase = "thinking"
+                        elif ev_type == "content":
+                            full_response_parts.append(ev.get("text", ""))
+                            dirty_phase = "content"
+
+                        # Drain any immediately queued chunks before rendering
+                        while True:
+                            try:
+                                next_ev = stream_q.get_nowait()
+                                if next_ev is stream_done:
+                                    ev = stream_done
+                                    break
+                                if next_ev.get("type") == "thinking":
+                                    thinking_parts.append(next_ev.get("text", ""))
+                                    if dirty_phase != "content":
+                                        dirty_phase = "thinking"
+                                elif next_ev.get("type") == "content":
+                                    full_response_parts.append(next_ev.get("text", ""))
+                                    dirty_phase = "content"
+                            except queue.Empty:
+                                break
+
+                        now_ts = time.perf_counter()
+                        if ev is stream_done:
+                            break
+                        if dirty_phase and (now_ts - last_ui_flush) >= ui_flush_interval:
+                            if dirty_phase == "content" and full_response_parts:
+                                response_placeholder.markdown("".join(full_response_parts) + "▌")
+                            elif dirty_phase == "thinking" and thinking_parts:
                                 recent_th = "".join(thinking_parts)[-90:].replace("\n", " ").strip()
                                 response_placeholder.markdown(
                                     render_thinking_badge("thinking", f"Reasoning ({selected_model}): {recent_th}..."),
                                     unsafe_allow_html=True
                                 )
-                            elif event["type"] == "content":
-                                full_response_parts.append(event["text"])
-                                response_placeholder.markdown("".join(full_response_parts) + "▌")
+                            last_ui_flush = now_ts
+                            dirty_phase = None
 
-                        final_preview = "".join(full_response_parts)
-                        if not final_preview and thinking_parts:
-                            final_preview = f"**Diagnostic Analysis & Findings:**\n\n{''.join(thinking_parts).strip()}"
-                        if final_preview:
-                            response_placeholder.markdown(final_preview)
+                    producer_thread.join(timeout=2.0)
+                    if stream_err:
+                        raise stream_err[0]
 
-                    run_async(stream_to_ui())
+                    final_preview = "".join(full_response_parts)
+                    if not final_preview and thinking_parts:
+                        final_preview = f"**Diagnostic Analysis & Findings:**\n\n{''.join(thinking_parts).strip()}"
+                    if final_preview:
+                        response_placeholder.markdown(final_preview)
+
                     full_response = "".join(full_response_parts).strip()
                     if not full_response and thinking_parts:
                         full_response = f"**Diagnostic Analysis & Findings:**\n\n{''.join(thinking_parts).strip()}"
@@ -2782,6 +3225,8 @@ if selected_page in ["💬 Chat", "💬 All-in-One Studio", "Chat", "All-in-One 
                     response_placeholder.error(err_text)
                     save_chat_message(st.session_state["active_conv_id"], "assistant", err_text)
                     st.session_state.messages.append({"role": "assistant", "content": err_text})
+
+        st.rerun()
 
 
 elif selected_page == "👥 Account Management":
@@ -2831,6 +3276,7 @@ elif selected_page in ["⚙️ Settings", "Settings", "⚙️ More", "More"]:
                 if new_m:
                     set_preference("selected_model", new_m)
                     st.session_state["selected_model_val"] = new_m
+                    st.session_state["chat_model_selector"] = new_m
 
             s_idx = model_names.index(selected_model) if selected_model in model_names else 0
             cur_sel_model = st.selectbox(

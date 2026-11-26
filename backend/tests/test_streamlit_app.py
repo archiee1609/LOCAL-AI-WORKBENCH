@@ -10,7 +10,7 @@ def test_streamlit_unauthenticated_shows_login_portal():
     at.run()
     assert len(at.exception) == 0, f"AppTest raised unexpected exceptions: {[e.value for e in at.exception]}"
     # Verify login portal elements are present
-    login_titles = [m.value for m in at.markdown if "Account Sign In" in m.value or "Local AI Workbench" in m.value]
+    login_titles = [m.value for m in at.markdown if "Account Sign In" in m.value or "ISOTOPE" in m.value]
     assert len(login_titles) > 0
     # Username and Password fields are rendered
     assert len(at.text_input) >= 2
@@ -35,7 +35,7 @@ def test_streamlit_app_renders_when_authenticated():
     # Verify top brand banner renders cleanly without raw unparsed code blocks
     banner_markdowns = [m.value for m in at.markdown if '<div class="brand-container">' in m.value]
     assert len(banner_markdowns) > 0
-    assert "LOCAL AI WORKBENCH" in banner_markdowns[0]
+    assert "ISOTOPE - AI COMPANION" in banner_markdowns[0]
     assert "100% Private" in banner_markdowns[0]
     # Ensure no raw unclosed or pre-formatted code block escapes
     assert "```" not in banner_markdowns[0]
@@ -123,6 +123,34 @@ def test_streamlit_quick_command_chips_render_cleanly():
     assert any("/report" in lbl for lbl in btn_labels)
     assert any("/search" in lbl for lbl in btn_labels)
     assert any("/pull" in lbl for lbl in btn_labels)
+
+    # Verify model selector exists directly in the chat command toolbar
+    model_selects = [s for s in at.selectbox if s.key == "chat_model_selector"]
+    assert len(model_selects) == 1
+    assert model_selects[0].value in model_selects[0].options
+
+
+def test_streamlit_chatbox_model_selector_switch():
+    """Headless test verifying model selection directly at the chatbox toolbar updates state."""
+    app_path = Path(__file__).parent.parent.parent / "streamlit_app.py"
+    at = AppTest.from_file(str(app_path.resolve()), default_timeout=30)
+    at.session_state["authenticated_user"] = {
+        "name": "Archiman Chakraborty",
+        "username": "achakrabort4",
+        "role": "User",
+        "workspace_path": str(Path(__file__).parent.parent.parent / "workspace" / "achakrabort4")
+    }
+    at.run()
+    assert len(at.exception) == 0
+
+    model_selects = [s for s in at.selectbox if s.key == "chat_model_selector"]
+    assert len(model_selects) == 1
+    opts = model_selects[0].options
+    if len(opts) > 1:
+        target_opt = opts[1] if opts[0] == model_selects[0].value else opts[0]
+        model_selects[0].select(target_opt).run()
+        assert len(at.exception) == 0
+        assert at.session_state.get("selected_model_val") == target_opt
 
 
 def test_streamlit_account_management_admin_page_renders_cleanly():

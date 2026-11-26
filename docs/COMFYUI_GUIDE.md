@@ -1,7 +1,7 @@
 # ComfyUI Image Generation Integration Guide
 
 ## Overview
-Local AI Workbench integrates with local image generation backends via an adapter architecture. ComfyUI is the primary supported engine, defaulting to:
+Isotope integrates with local image generation backends via an adapter architecture. ComfyUI is the primary supported engine, defaulting to:
 ```
 http://127.0.0.1:8188
 ```
@@ -25,7 +25,7 @@ http://127.0.0.1:8188
 
 ---
 
-## 2. Launching ComfyUI for Workbench
+## 2. Launching ComfyUI for Isotope
 Start ComfyUI on loopback port 8188:
 ```powershell
 python main.py --listen 127.0.0.1 --port 8188

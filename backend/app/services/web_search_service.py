@@ -83,7 +83,7 @@ class WebSearchService:
         # 2. Secondary Knowledge Engine: Wikipedia API (for technical, biographical, or encyclopedia concepts)
         if len(results) < max_results:
             try:
-                wiki_headers = {"User-Agent": "LocalAIWorkbench/1.0 (internal-local-rag)"}
+                wiki_headers = {"User-Agent": "IsotopeAICompanion/1.0 (internal-local-rag)"}
                 async with httpx.AsyncClient(timeout=6.0, follow_redirects=True, headers=wiki_headers) as client:
                     w_res = await client.get(
                         "https://en.wikipedia.org/w/api.php",

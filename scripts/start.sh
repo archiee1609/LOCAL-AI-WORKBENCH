@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ========================================================
-#       LOCAL AI WORKBENCH - BACKEND LAUNCH SCRIPT
+#       ISOTOPE - AI COMPANION BACKEND LAUNCH SCRIPT
 #       Supports macOS (Apple Silicon & Intel) & Linux
 # ========================================================
 
@@ -10,7 +10,7 @@ ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "${ROOT_DIR}"
 
 echo "========================================================"
-echo "          LOCAL AI WORKBENCH - LAUNCH SCRIPT            "
+echo "        ISOTOPE - AI COMPANION LAUNCH SCRIPT            "
 echo "========================================================"
 echo ""
 
@@ -56,7 +56,7 @@ fi
 # 2. Open browser
 URL="http://127.0.0.1:8000"
 echo ""
-echo "[*] Starting Local AI Workbench server at ${URL}..."
+echo "[*] Starting Isotope server at ${URL}..."
 echo "[*] Press Ctrl+C to stop the application."
 echo ""
 

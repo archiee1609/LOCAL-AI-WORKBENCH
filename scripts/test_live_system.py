@@ -14,7 +14,7 @@ BASE_URL = "http://127.0.0.1:8000"
 async def run_comprehensive_system_check():
     results = {}
     print("=" * 60)
-    print("  LOCAL AI WORKBENCH - COMPREHENSIVE LIVE SYSTEM TEST")
+    print("  ISOTOPE - AI COMPANION - COMPREHENSIVE LIVE SYSTEM TEST")
     print("=" * 60)
 
     async with httpx.AsyncClient(timeout=120.0) as client:
@@ -24,7 +24,7 @@ async def run_comprehensive_system_check():
             r = await client.get(f"{BASE_URL}/")
             assert r.status_code == 200
             assert "<!DOCTYPE html>" in r.text
-            assert "Local AI Workbench" in r.text
+            assert "Isotope - AI Companion" in r.text
             print("  [PASS] Root endpoint correctly serves compiled React SPA index.html")
             results["root_frontend"] = "PASS"
         except Exception as e:
@@ -175,7 +175,7 @@ async def run_comprehensive_system_check():
             # Write file in workspace
             write_res = await client.post(f"{BASE_URL}/api/tools/execute", json={
                 "tool_name": "write_workspace_file",
-                "arguments": {"path": "test_verification.txt", "content": "Workbench Live Test File"},
+                "arguments": {"path": "test_verification.txt", "content": "Isotope Live Test File"},
                 "approved": True
             })
             assert write_res.status_code == 200
@@ -187,7 +187,7 @@ async def run_comprehensive_system_check():
                 "arguments": {"path": "test_verification.txt"}
             })
             assert read_res.status_code == 200
-            assert "Workbench Live Test File" in read_res.json()["result"]["content"]
+            assert "Isotope Live Test File" in read_res.json()["result"]["content"]
 
             print("  [PASS] Tools verified: calculator, write_workspace_file, read_workspace_file.")
             results["tools_execution"] = "PASS"
@@ -243,11 +243,11 @@ async def run_comprehensive_system_check():
             # 2. Compute Diff
             diff_res = await client.post(f"{BASE_URL}/api/coding/diff", json={
                 "path": "test_verification.txt",
-                "new_content": "Workbench Live Test File - Modified by Agent"
+                "new_content": "Isotope Live Test File - Modified by Agent"
             })
             assert diff_res.status_code == 200
             diff_content = diff_res.json()["diff"]
-            assert "+Workbench Live Test File - Modified by Agent" in diff_content
+            assert "+Isotope Live Test File - Modified by Agent" in diff_content
 
             # 3. Create Task & Apply Changes
             task_res = await client.post(f"{BASE_URL}/api/coding/tasks", json={
@@ -259,7 +259,7 @@ async def run_comprehensive_system_check():
                 "approved": True,
                 "file_changes": [{
                     "path": "test_verification.txt",
-                    "content": "Workbench Live Test File - Modified by Agent"
+                    "content": "Isotope Live Test File - Modified by Agent"
                 }]
             })
             assert apply_res.status_code == 200
