@@ -16,9 +16,12 @@ import shutil
 import threading
 import time
 import uuid
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
+from urllib.parse import urlparse
 
+import httpx
 import openpyxl
 
 from app.core.config import settings
@@ -32,6 +35,7 @@ SOURCE_TYPE_LABELS = {
     "known_tip": "💡 Known Tip",
     "leap_tip": "🚀 LEAP Tip",
     "tech_tip": "📅 Thursday Tech Tip",
+    "video_guide": "🎬 Part Removal Video",
     "document": "📄 Resource Document",
 }
 
@@ -238,6 +242,8 @@ class LenovoKBService:
         self._last_check_ts: float = 0.0
         self._known_mt_cache: Set[str] = set()
         self._cache_db_path: Optional[str] = None
+        self._video_cache: Dict[str, Tuple[Dict[str, Any], float]] = {}
+        self._video_cache_ttl: float = 3600.0
 
     def ensure_tables(self) -> None:
         cur_path = str(db.db_path)
@@ -280,8 +286,9 @@ class LenovoKBService:
             for r in rows:
                 for token in re.split(r"[,\s;]+", str(r.get("machine_types") or "")):
                     tok = token.strip().upper()
-                    if len(tok) == 4 and tok.isalnum():
-                        mts.add(tok)
+                    if 3 <= len(tok) <= 6 and tok.isalnum() and any(ch.isdigit() for ch in tok):
+                        if not (tok.isdigit() and 2015 <= int(tok) <= 2035):
+                            mts.add(tok)
             self._known_mt_cache = mts
             self._cache_db_path = cur_path
         except Exception:
@@ -746,6 +753,95 @@ class LenovoKBService:
             })
         return records
 
+    def _parse_video_links_sheet(
+        self, ws: Any, rel_name: str, sheet_name: str
+    ) -> List[Dict[str, Any]]:
+        """Parses MT -> Model -> Hyperlink Part Removal Video mappings cleanly."""
+        headers: Dict[int, str] = {}
+        for col_idx in range(1, min(ws.max_column + 1, 15)):
+            h = _clean_inline(ws.cell(1, col_idx).value)
+            if h:
+                headers[col_idx] = h.lower()
+
+        def find_col(*candidates: str) -> Optional[int]:
+            for cand in candidates:
+                cl = cand.lower()
+                for c_idx, h_val in headers.items():
+                    if h_val == cl or cl in h_val:
+                        return c_idx
+            return None
+
+        c_mt = find_col("mt", "machine type")
+        c_model = find_col("model", "product")
+        c_link = find_col("hyperlink", "video link", "video", "link", "url")
+
+        records: List[Dict[str, Any]] = []
+        for r_idx in range(2, ws.max_row + 1):
+            mt_val = _clean_inline(ws.cell(r_idx, c_mt).value) if c_mt else ""
+            model_val = _clean_inline(ws.cell(r_idx, c_model).value) if c_model else ""
+            url_val = _clean_inline(ws.cell(r_idx, c_link).value) if c_link else ""
+            if c_link and not url_val:
+                hl = getattr(ws.cell(r_idx, c_link), "hyperlink", None)
+                if hl and getattr(hl, "target", None):
+                    url_val = str(hl.target).strip()
+
+            if not model_val and not url_val and not mt_val:
+                continue
+
+            mt_list: List[str] = []
+            if mt_val:
+                clean_mt = mt_val.upper()
+                mt_list.append(clean_mt)
+                if clean_mt.isdigit() and len(clean_mt) == 3:
+                    mt_list.append(clean_mt.zfill(4))
+            mt_list.extend(x for x in _extract_machine_types(model_val) if x not in mt_list)
+
+            ht_match = re.search(r"\b(HT\d{5,})\b", url_val, re.IGNORECASE)
+            ht_code = ht_match.group(1).upper() if ht_match else ""
+            display_model = model_val or (f"MT {mt_val}" if mt_val else "Lenovo System")
+            title = f"Part Removal Video: {display_model}"
+            links = [{"label": f"Part Removal Video ({ht_code})" if ht_code else "Part Removal Video", "url": url_val}] if url_val else []
+
+            canon_src = f"video|{display_model.lower()}|{url_val.lower()}"
+            canonical_key = hashlib.sha1(canon_src.encode("utf-8")).hexdigest()
+
+            res_text = f"Official Lenovo Part Removal & Replacement Video Guide{' (' + ht_code + ')' if ht_code else ''} for {display_model}."
+            if url_val:
+                res_text += f" Resource link: {url_val}"
+
+            records.append({
+                "canonical_key": canonical_key,
+                "source_file": rel_name,
+                "sheet_name": sheet_name,
+                "row_number": r_idx,
+                "source_type": "video_guide",
+                "issue_code": ht_code,
+                "model_names": display_model,
+                "machine_types": ", ".join(mt_list),
+                "segment": "",
+                "vendor": "Lenovo",
+                "commodity": "Part Removal Video",
+                "fru_parts": "",
+                "buffer_parts": "",
+                "pd_code": "",
+                "qdts_code": "",
+                "critsit": "",
+                "applicable_market": "",
+                "confirmed_qi": "",
+                "issue_status": "Video Guide",
+                "impact": "",
+                "title": title[:220],
+                "symptoms": f"Part removal, teardown, and CRU/FRU replacement video guide for {display_model}",
+                "root_cause": "",
+                "resolution": res_text,
+                "extra_notes": "",
+                "links": links,
+                "assets": [],
+                "record_date": "",
+                "quarter": "",
+            })
+        return records
+
     def _parse_excel_file(
         self, path: Path, rel_name: str, assets_dir: Path
     ) -> Tuple[List[Dict[str, Any]], int]:
@@ -771,6 +867,8 @@ class LenovoKBService:
                     all_records.extend(self._parse_thursday_tech_tips_sheet(ws, rel_name, sname))
                 elif "product/model" in r1_lower and "issue title" in r1_lower:
                     all_records.extend(self._parse_known_tips_sheet(ws, rel_name, sname, row_assets))
+                elif "mt" in r1_lower and "model" in r1_lower and any(k in r1_lower for k in ("hyperlink", "video link", "video", "url")):
+                    all_records.extend(self._parse_video_links_sheet(ws, rel_name, sname))
                 elif "issues" in r1_lower and ("mt" in r1_lower or "remark" in r1_lower or "root cause" in r1_lower):
                     s_type = "leap_tip" if "leap" in sname.lower() or "leap" in rel_name.lower() else "known_issue"
                     all_records.extend(self._parse_ap_or_leap_sheet(ws, rel_name, sname, s_type, row_assets))
@@ -933,6 +1031,11 @@ class LenovoKBService:
                 existing = merged_map[ckey]
                 if src_label not in existing["source_files_list"]:
                     existing["source_files_list"].append(src_label)
+                if rec.get("machine_types"):
+                    ex_mts = [t.strip() for t in str(existing.get("machine_types") or "").split(",") if t.strip()]
+                    new_mts = [t.strip() for t in str(rec.get("machine_types") or "").split(",") if t.strip()]
+                    merged_mts = list(dict.fromkeys(ex_mts + new_mts))
+                    existing["machine_types"] = ", ".join(merged_mts)
                 # Keep richer fields if new duplicate fills any missing metadata
                 for fld in (
                     "issue_code", "model_names", "machine_types", "segment", "vendor",
@@ -1205,9 +1308,11 @@ class LenovoKBService:
             return True
 
         brand_terms = (
-            "lenovo", "thinkpad", "thinkbook", "thinkcentre", "thinkvision",
+            "lenovo", "thinkpad", "thinkbook", "thinkcentre", "thinkvision", "thinkstation",
             "ideapad", "ideacentre", "yoga", "legion", "loq", "vantage",
             "leap tip", "thursday tech", "known tip", "known issue",
+            "part removal", "removal video", "replacement video", "removal guide",
+            "disassembly", "teardown", "fru video", "cru video",
             "qdts", "critsit", "confirmed qi", "impactfru", "buffer part",
             "pd code", "pdt", "aptt", "mbd", "bezel peel", "hinge",
         )
@@ -1223,20 +1328,22 @@ class LenovoKBService:
             r"\bm(?:90a|90q|70|80)\b",
             r"\bp(?:27h|34w|14|15|16)\b",
             r"\b(?:slim|ip|ip3|ip5)\s*[35]\b",
+            r"\b(?:flex|essential)\s*\d+\b",
+            r"\b(?:battery|keyboard|ssd|hdd|hard\s*disk|memory|ram|lcd|screen|panel|base\s*cover|bottom\s*case|touchpad|fan|thermal|heatsink|wifi|wireless|speaker|motherboard|system\s*board|hinge|bezel)\s+(?:removal|replacement|teardown|disassembly)\b",
             r"\b(?:14|15|16)(?:iah|itl|irh|arp|akp|ahp|iau|alc|iap|iax|irx)\d*\b",
             r"\b(?:aptt|qdts|mcnw|mtpw|rcnw|ctpi)\d+[a-z0-9]*\b",
-            r"\bht5\d{4,}\b",
+            r"\bht\d{4,}\b",
             r"\b5[a-z]\d{2}[a-z0-9]{5,}\b",  # FRU numbers like 5B11Q02019
             r"\bpost\s*210[01]\b|\bno\s+post\b|\bbezel\s+peel\b|\bnovo\s+button\b|\b0xc0000135\b|\btrackpoint\b",
         ]
         if any(re.search(pat, q, re.IGNORECASE) for pat in model_patterns):
             return True
 
-        # Check against actual indexed 4-char Machine Types in SQLite
+        # Check against actual indexed Machine Types (3-6 chars like 21CB, 20S0, 0302, 10050, Z380) in SQLite
         self.ensure_synced()
         if not self._known_mt_cache:
             self._refresh_known_mt_cache()
-        tokens = set(re.findall(r"\b[A-Z0-9]{4}\b", q.upper()))
+        tokens = set(re.findall(r"\b[A-Z0-9]{3,6}\b", q.upper()))
         if tokens & self._known_mt_cache:
             return True
 
@@ -1424,6 +1531,8 @@ class LenovoKBService:
         if re.search(r"\bideapad\s*slim\s*5\b|\bslim\s*5\b", phrase_l):
             family_aliases.extend(["slim 5", "ips5"])
 
+        is_video_intent = bool(re.search(r"\b(video|videos|removal|remove|disassembl\w*|teardown|replace\w*|cru)\b", phrase_l))
+
         for _, (row, base_bm25) in candidates.items():
             score = base_bm25
             title_l = (row.get("title") or "").lower()
@@ -1446,9 +1555,11 @@ class LenovoKBService:
                 if re.search(rf"\b{re.escape(mt)}\b", mt_u) or re.search(rf"\b{re.escape(mt)}\b", codes_u):
                     score += 65.0
 
-            # Exact code / SKU / APTT / FRU / PD hit (+45)
+            # Exact code / numeric MT / SKU / APTT / FRU / PD hit (+45 to +58)
             for ec in exact_codes:
-                if ec in mt_u or ec in codes_u or ec in fru_u:
+                if re.search(rf"\b{re.escape(ec)}\b", mt_u):
+                    score += 58.0
+                elif ec in mt_u or ec in codes_u or ec in fru_u:
                     score += 45.0
                 elif ec.lower() in model_l or ec.lower() in title_l:
                     score += 38.0
@@ -1461,6 +1572,8 @@ class LenovoKBService:
                 for t in meaningful_terms:
                     if t in model_l or t in title_l:
                         score += 14.0
+                        if re.search(rf"\b{re.escape(t)}\b", f"{title_l} {model_l}"):
+                            score += 12.0
                         matched_cnt += 1
                     elif t in symp_l or t in res_l or t in rc_l:
                         score += 7.0
@@ -1493,7 +1606,9 @@ class LenovoKBService:
                     score += 20.0
 
             # Actionability & quality boosts
-            if row.get("source_type") in ("known_issue", "known_tip", "leap_tip") and len(res_l) > 15:
+            if is_video_intent and row.get("source_type") == "video_guide":
+                score += 38.0
+            elif row.get("source_type") in ("known_issue", "known_tip", "leap_tip") and len(res_l) > 15:
                 score += 12.0
             if (row.get("confirmed_qi") or "").strip().lower() == "yes":
                 score += 8.0
@@ -1632,6 +1747,437 @@ class LenovoKBService:
             "file_size": len(file_bytes),
             "sync_result": sync_res,
         }
+
+    def resolve_solution_videos(
+        self,
+        url_or_id: str,
+        query_hint: str = "",
+        force_refresh: bool = False,
+    ) -> Dict[str, Any]:
+        """Resolves Lenovo support solution URLs into playable MP4/YouTube part removal videos and HMM manuals."""
+        raw = str(url_or_id or "").strip()
+        if not raw:
+            return {
+                "solution_id": "",
+                "original_url": "",
+                "resolved_url": "",
+                "cdn_script_url": "",
+                "page_title": "",
+                "videos": [],
+                "recommended_video": None,
+                "best_index": 0,
+                "manuals": [],
+                "error": "No URL or solution ID provided.",
+                "cached": False,
+            }
+
+        # Direct playable MP4 / YouTube links require no scraping
+        if _is_direct_video_url(raw):
+            vtype = _classify_video_url(raw)
+            title = _title_from_video_url(raw)
+            vid = {
+                "title": title,
+                "url": raw,
+                "video_type": vtype,
+                "action_type": _infer_video_action(title, raw),
+                "match_score": 1.0,
+            }
+            return {
+                "solution_id": "",
+                "original_url": raw,
+                "resolved_url": raw,
+                "cdn_script_url": "",
+                "page_title": title,
+                "videos": [vid],
+                "recommended_video": vid,
+                "best_index": 0,
+                "manuals": [],
+                "error": "",
+                "cached": False,
+            }
+
+        ht_id, canonical_url = _normalize_lenovo_solution_url(raw)
+        cache_key = canonical_url or raw
+
+        cached_payload: Optional[Dict[str, Any]] = None
+        if not force_refresh and cache_key in self._video_cache:
+            entry, ts = self._video_cache[cache_key]
+            if (time.monotonic() - ts) < self._video_cache_ttl:
+                cached_payload = entry
+
+        was_cached = cached_payload is not None
+        if cached_payload is None:
+            cached_payload = self._fetch_lenovo_solution_media(raw, ht_id, canonical_url)
+            if cached_payload.get("videos") or not cached_payload.get("error"):
+                self._video_cache[cache_key] = (cached_payload, time.monotonic())
+
+        videos = [dict(v) for v in (cached_payload.get("videos") or [])]
+        best_idx = 0
+        recommended = None
+        if videos:
+            best_score = float("-inf")
+            for idx, vid in enumerate(videos):
+                sc = _score_video_match(vid, query_hint)
+                vid["match_score"] = round(sc, 2)
+                if sc > best_score:
+                    best_score = sc
+                    best_idx = idx
+            recommended = dict(videos[best_idx])
+
+        return {
+            "solution_id": cached_payload.get("solution_id", ht_id),
+            "original_url": raw,
+            "resolved_url": cached_payload.get("resolved_url", canonical_url),
+            "cdn_script_url": cached_payload.get("cdn_script_url", ""),
+            "page_title": cached_payload.get("page_title", ""),
+            "videos": videos,
+            "recommended_video": recommended,
+            "best_index": best_idx,
+            "manuals": [dict(m) for m in (cached_payload.get("manuals") or [])],
+            "error": cached_payload.get("error", ""),
+            "cached": was_cached,
+        }
+
+    def _fetch_lenovo_solution_media(
+        self, original_url: str, ht_id: str, resolved_url: str
+    ) -> Dict[str, Any]:
+        target_url = resolved_url or original_url
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            ),
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+        }
+        cdn_script_url = ""
+        page_title = ""
+        body_html = ""
+        html_text = ""
+
+        try:
+            with httpx.Client(follow_redirects=True, timeout=12.0, headers=headers) as client:
+                resp = client.get(target_url)
+                if resp.status_code >= 400:
+                    return {
+                        "solution_id": ht_id,
+                        "original_url": original_url,
+                        "resolved_url": str(resp.url or target_url),
+                        "cdn_script_url": "",
+                        "page_title": "",
+                        "videos": [],
+                        "manuals": [],
+                        "error": f"Lenovo support page returned HTTP {resp.status_code}.",
+                    }
+                target_url = str(resp.url or target_url)
+                html_text = resp.text or ""
+                title_m = re.search(r"<title[^>]*>(.*?)</title>", html_text, re.I | re.S)
+                if title_m:
+                    page_title = re.sub(r"\s+", " ", html_lib_unescape(title_m.group(1))).strip()
+
+                cdn_matches = re.findall(
+                    r'((?:https?://pcsupport\.lenovo\.com)?/(?:[a-z]{2}/[a-z]{2}/)?api/v4/contents/cdn/[a-zA-Z0-9_]+\.js)',
+                    html_text,
+                )
+                for cdn_path in cdn_matches[:2]:
+                    full_cdn = (
+                        cdn_path
+                        if cdn_path.startswith("http")
+                        else f"https://pcsupport.lenovo.com{cdn_path}"
+                    )
+                    cdn_resp = client.get(full_cdn)
+                    if cdn_resp.status_code < 400 and cdn_resp.text:
+                        cdn_script_url = full_cdn
+                        cdn_data = _parse_lenovo_cdn_payload(cdn_resp.text)
+                        if cdn_data.get("body"):
+                            body_html = cdn_data["body"]
+                        else:
+                            body_html = cdn_resp.text
+                        if not page_title and cdn_data.get("title"):
+                            page_title = str(cdn_data["title"]).strip()
+                        if body_html:
+                            break
+        except Exception as exc:
+            logger.warning(f"[LenovoKBService] resolve_solution_videos failed for {target_url}: {exc}")
+            return {
+                "solution_id": ht_id,
+                "original_url": original_url,
+                "resolved_url": target_url,
+                "cdn_script_url": cdn_script_url,
+                "page_title": page_title,
+                "videos": [],
+                "manuals": [],
+                "error": f"Could not reach pcsupport.lenovo.com ({exc}).",
+            }
+
+        videos, manuals = _extract_media_from_html(body_html or html_text)
+        if not videos and html_text and body_html:
+            # Fallback scan on outer page HTML in case video embed lives outside CDN body
+            videos, extra_manuals = _extract_media_from_html(html_text)
+            if not manuals:
+                manuals = extra_manuals
+
+        return {
+            "solution_id": ht_id,
+            "original_url": original_url,
+            "resolved_url": target_url,
+            "cdn_script_url": cdn_script_url,
+            "page_title": page_title,
+            "videos": videos,
+            "manuals": manuals,
+            "error": "" if videos else "No direct playable video links were found on the solution page.",
+        }
+
+
+def html_lib_unescape(text: str) -> str:
+    import html as _html
+    return _html.unescape(text or "")
+
+
+_VIDEO_FILE_RE = re.compile(r"\.(?:mp4|webm|m4v|mov|m3u8)(?:$|\?)", re.I)
+_YOUTUBE_VIDEO_RE = re.compile(
+    r"(?:youtube\.com/(?:watch\?[^#]*v=|embed/|shorts/)|youtu\.be/)([A-Za-z0-9_-]{6,})",
+    re.I,
+)
+_HT_ID_RE = re.compile(r"\b(HT\d{4,10})\b", re.I)
+
+_PART_SYNONYMS: Dict[str, Tuple[str, ...]] = {
+    "ssd": ("ssd", "solid state", "m.2", "nvme", "hard disk", "hdd", "storage"),
+    "hdd": ("hard disk", "hdd", "ssd", "storage", "drive"),
+    "ram": ("memory", "ram", "dimm", "sodimm"),
+    "memory": ("memory", "ram", "dimm", "sodimm"),
+    "battery": ("battery", "built-in battery"),
+    "cmos": ("coin cell", "cmos", "rtc"),
+    "coin": ("coin cell", "cmos", "rtc"),
+    "keyboard": ("keyboard", "kbd", "key"),
+    "screen": ("lcd", "display", "panel", "screen", "bezel"),
+    "lcd": ("lcd", "display", "panel", "screen", "bezel"),
+    "display": ("lcd", "display", "panel", "screen"),
+    "base": ("base cover", "bottom case", "bottom", "cover", "door"),
+    "bottom": ("bottom case", "base cover", "bottom", "cover", "door"),
+    "cover": ("base cover", "bottom case", "cover", "door"),
+    "fan": ("fan", "thermal", "heatsink", "cooling"),
+    "thermal": ("thermal", "heatsink", "fan"),
+    "heatsink": ("heatsink", "thermal", "fan"),
+    "wifi": ("wireless", "wlan", "wifi", "wi-fi", "antenna"),
+    "wlan": ("wireless", "wlan", "wifi", "antenna"),
+    "wireless": ("wireless", "wlan", "wifi"),
+    "touchpad": ("touchpad", "trackpad", "clickpad"),
+    "trackpad": ("touchpad", "trackpad", "clickpad"),
+    "speaker": ("speaker", "speakers", "audio"),
+    "motherboard": ("system board", "motherboard", "mainboard"),
+    "board": ("system board", "motherboard", "power button board", "io board"),
+    "hinge": ("hinge", "hinges"),
+    "camera": ("camera", "webcam", "ir camera"),
+}
+
+_STOP_HINT_TOKENS = {
+    "lenovo", "thinkpad", "ideapad", "thinkbook", "thinkcentre", "thinkstation",
+    "yoga", "legion", "loq", "flex", "essential", "ideacentre", "video", "videos",
+    "link", "links", "remove", "removal", "replace", "replacement", "how", "to",
+    "part", "parts", "show", "play", "find", "the", "for", "of", "on", "in", "a",
+    "an", "my", "please", "open", "watch", "guide", "tutorial", "fru", "cru",
+}
+
+
+class _SolutionPageParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.anchors: List[Tuple[str, str]] = []
+        self.media_srcs: List[Tuple[str, str]] = []
+        self._cur_href: Optional[str] = None
+        self._cur_text: List[str] = []
+
+    def handle_starttag(self, tag: str, attrs: List[Tuple[str, Optional[str]]]) -> None:
+        t = tag.lower()
+        attr_map = {k.lower(): (v or "") for k, v in attrs}
+        if t == "a" and attr_map.get("href"):
+            self._cur_href = attr_map["href"].strip()
+            self._cur_text = []
+        elif t in ("video", "source", "iframe") and attr_map.get("src"):
+            label = attr_map.get("title") or attr_map.get("aria-label") or ""
+            self.media_srcs.append((label.strip(), attr_map["src"].strip()))
+
+    def handle_data(self, data: str) -> None:
+        if self._cur_href is not None:
+            self._cur_text.append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag.lower() == "a" and self._cur_href is not None:
+            label = " ".join("".join(self._cur_text).split()).strip()
+            self.anchors.append((label, self._cur_href))
+            self._cur_href = None
+            self._cur_text = []
+
+
+def _normalize_lenovo_solution_url(raw: str) -> Tuple[str, str]:
+    ht_m = _HT_ID_RE.search(raw)
+    if not ht_m:
+        return "", raw
+    ht_id = ht_m.group(1).upper()
+    locale = "us/en"
+    try:
+        parsed = urlparse(raw)
+        loc_m = re.match(r"^/([a-z]{2}/[a-z]{2})/", parsed.path or "", re.I)
+        if loc_m:
+            locale = loc_m.group(1).lower()
+    except Exception:
+        pass
+    return ht_id, f"https://pcsupport.lenovo.com/{locale}/solutions/{ht_id.lower()}"
+
+
+def _is_direct_video_url(url: str) -> bool:
+    u = str(url or "").strip()
+    if not u.startswith(("http://", "https://")):
+        return False
+    return bool(_VIDEO_FILE_RE.search(u) or _YOUTUBE_VIDEO_RE.search(u))
+
+
+def _classify_video_url(url: str) -> str:
+    if _YOUTUBE_VIDEO_RE.search(url or ""):
+        return "youtube"
+    if _VIDEO_FILE_RE.search(url or ""):
+        return "mp4"
+    return "iframe"
+
+
+def _title_from_video_url(url: str) -> str:
+    yt_m = _YOUTUBE_VIDEO_RE.search(url or "")
+    if yt_m:
+        return f"YouTube Video ({yt_m.group(1)})"
+    try:
+        stem = Path(urlparse(url).path).stem
+        cleaned = re.sub(r"^[^_]+_(?:FRU|CRU)_\d+_", "", stem, flags=re.I)
+        cleaned = re.sub(r"[_\-]+", " ", cleaned).strip()
+        return cleaned or stem or "Part Removal Video"
+    except Exception:
+        return "Part Removal Video"
+
+
+def _infer_video_action(title: str, url: str) -> str:
+    combined = f"{title} {url}".lower()
+    if "removal" in combined or "_rem_" in combined or "-rem-" in combined:
+        return "removal"
+    if "replacement" in combined or "_rep_" in combined or "-rep-" in combined:
+        return "replacement"
+    return "guide"
+
+
+def _parse_lenovo_cdn_payload(cdn_text: str) -> Dict[str, Any]:
+    m = re.search(r"Object\.assign\(\s*window\.cdnData\s*,\s*(\{.*\})\s*\)\s*;?\s*$", cdn_text or "", re.S)
+    if m:
+        try:
+            obj = json.loads(m.group(1))
+            if isinstance(obj, dict):
+                return obj
+        except Exception:
+            pass
+    return {}
+
+
+def _extract_media_from_html(html_fragment: str) -> Tuple[List[Dict[str, Any]], List[Dict[str, str]]]:
+    parser = _SolutionPageParser()
+    try:
+        parser.feed(html_fragment or "")
+    except Exception:
+        pass
+
+    videos: List[Dict[str, Any]] = []
+    manuals: List[Dict[str, str]] = []
+    seen_video_urls: Set[str] = set()
+    seen_manual_urls: Set[str] = set()
+
+    def _add_video(label: str, href: str) -> None:
+        clean_url = (href or "").strip()
+        if not clean_url or clean_url in seen_video_urls:
+            return
+        if clean_url.startswith("//"):
+            clean_url = "https:" + clean_url
+        elif clean_url.startswith("/"):
+            clean_url = "https://pcsupport.lenovo.com" + clean_url
+        if not clean_url.startswith(("http://", "https://")):
+            return
+        vtype = _classify_video_url(clean_url)
+        if vtype == "iframe" and not any(h in clean_url.lower() for h in ("youtube", "youtu.be", "vimeo", "brightcove")):
+            return
+        seen_video_urls.add(clean_url)
+        clean_title = (label or "").strip() or _title_from_video_url(clean_url)
+        videos.append({
+            "title": clean_title,
+            "url": clean_url,
+            "video_type": vtype,
+            "action_type": _infer_video_action(clean_title, clean_url),
+            "match_score": 0.0,
+        })
+
+    for label, href in parser.anchors:
+        low_href = href.lower()
+        if _VIDEO_FILE_RE.search(low_href) or _YOUTUBE_VIDEO_RE.search(href):
+            _add_video(label, href)
+        elif low_href.split("?")[0].endswith(".pdf") and href not in seen_manual_urls:
+            full_pdf = f"https://pcsupport.lenovo.com{href}" if href.startswith("/") else href
+            seen_manual_urls.add(full_pdf)
+            manuals.append({"title": label or "Hardware Maintenance Manual (PDF)", "url": full_pdf})
+
+    for label, src in parser.media_srcs:
+        _add_video(label, src)
+
+    # Regex fallback for raw JS/HTML fragments without anchor markup
+    if not videos:
+        for raw_u in re.findall(r'https?://[^\s"\'<>\\]+\.(?:mp4|webm|m3u8)(?:\?[^\s"\'<>\\]*)?', html_fragment or "", re.I):
+            _add_video("", raw_u)
+        for yt_m in _YOUTUBE_VIDEO_RE.finditer(html_fragment or ""):
+            _add_video("", f"https://www.youtube.com/watch?v={yt_m.group(1)}")
+
+    return videos, manuals
+
+
+def _score_video_match(video: Dict[str, Any], query_hint: str) -> float:
+    hint = (query_hint or "").lower().strip()
+    title_low = (video.get("title") or "").lower()
+    url_low = (video.get("url") or "").lower()
+    hay = f"{title_low} {url_low}"
+
+    score = 0.0
+    if video.get("video_type") == "mp4":
+        score += 1.0
+
+    want_replace = any(w in hint for w in ("replace", "replacement", "install", "reinstall"))
+    want_remove = any(w in hint for w in ("remove", "removal", "disassembl", "take out")) or not want_replace
+    action = video.get("action_type", "guide")
+    if want_replace and action == "replacement":
+        score += 2.5
+    elif want_remove and action == "removal":
+        score += 2.5
+    elif want_remove and action == "replacement":
+        score -= 1.0
+
+    raw_tokens = re.findall(r"[a-z0-9.]+", hint)
+    meaningful = [t for t in raw_tokens if len(t) >= 2 and t not in _STOP_HINT_TOKENS and not _HT_ID_RE.match(t)]
+
+    # Expand synonyms
+    expanded_terms: Set[str] = set()
+    for tok in meaningful:
+        expanded_terms.add(tok)
+        for syn in _PART_SYNONYMS.get(tok, ()):
+            expanded_terms.add(syn)
+
+    for term in expanded_terms:
+        if re.search(rf"\b{re.escape(term)}\b", title_low):
+            score += 8.0
+        elif term in title_low:
+            score += 5.0
+        elif term in url_low:
+            score += 3.0
+
+    # Avoid choosing "Disable Built-In Battery" or "Coin Cell Battery" when user simply asks for "battery"
+    if meaningful:
+        if "disable" not in hint and "disable" in title_low:
+            score -= 2.5
+        if not any(w in hint for w in ("coin", "cmos", "rtc")) and "coin" in title_low:
+            score -= 2.0
+
+    return score
 
 
 lenovo_kb_service = LenovoKBService()

@@ -45,6 +45,16 @@ async def search_kb(
     }
 
 
+@router.get("/resolve-videos")
+async def resolve_kb_videos(
+    url: str = Query(..., min_length=4, description="Lenovo solution URL (e.g. support.lenovo.com/.../HT510512) or HT ID"),
+    q: str = Query("", description="Optional component/part query hint (e.g. 'keyboard', 'battery', 'ssd')"),
+    force_refresh: bool = Query(False),
+):
+    """Redirects Lenovo support links to playable MP4/YouTube part removal videos and HMM manuals."""
+    return lenovo_kb_service.resolve_solution_videos(url, query_hint=q, force_refresh=force_refresh)
+
+
 @router.post("/sync")
 async def sync_kb(
     force: bool = Query(True),

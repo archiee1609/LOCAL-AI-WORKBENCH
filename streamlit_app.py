@@ -2711,36 +2711,70 @@ def _collect_kb_assets(kb_matches: List[Dict[str, Any]], max_images: int = 3) ->
     return out
 
 
-def _build_kb_citations_markdown(kb_matches: List[Dict[str, Any]], max_items: int = 6) -> str:
+def _build_kb_citations_markdown(
+    kb_matches: List[Dict[str, Any]],
+    max_items: int = 6,
+    video_bundle: Optional[Dict[str, Any]] = None,
+) -> str:
     """Builds concise clickable citation footer referencing matched internal Lenovo resources."""
-    if not kb_matches:
+    if not kb_matches and not video_bundle:
         return ""
-    c_lines = [f"\n\n---\n**📚 Lenovo Tips & Resources Citations ({min(len(kb_matches), max_items)} match(es)):**"]
-    for idx, item in enumerate(kb_matches[:max_items], start=1):
-        bits = [f"`{item.get('source_file', '')}`"]
-        if item.get("issue_code"):
-            bits.append(f"ID `{item['issue_code']}`")
-        if item.get("machine_types"):
-            bits.append(f"MT `{item['machine_types']}`")
-        if item.get("fru_parts"):
-            bits.append(f"FRU `{item['fru_parts']}`")
-        if item.get("pd_code"):
-            bits.append(f"PD `{item['pd_code']}`")
-        if item.get("confirmed_qi"):
-            bits.append(f"Confirmed QI: {item['confirmed_qi']}")
-        links = item.get("links") or []
-        link_md = ""
-        if links and links[0].get("url"):
-            link_md = f" — [Open Reference]({links[0]['url']})"
-        c_lines.append(f"- **[KB-{idx}]** {item.get('title', 'Tip')} ({' • '.join(bits)}){link_md}")
+    c_lines: List[str] = []
+    if kb_matches:
+        c_lines.append(f"\n\n---\n**📚 Lenovo Tips & Resources Citations ({min(len(kb_matches), max_items)} match(es)):**")
+        for idx, item in enumerate(kb_matches[:max_items], start=1):
+            bits = [f"`{item.get('source_file', '')}`"]
+            if item.get("issue_code"):
+                bits.append(f"ID `{item['issue_code']}`")
+            if item.get("machine_types"):
+                bits.append(f"MT `{item['machine_types']}`")
+            if item.get("fru_parts"):
+                bits.append(f"FRU `{item['fru_parts']}`")
+            if item.get("pd_code"):
+                bits.append(f"PD `{item['pd_code']}`")
+            if item.get("confirmed_qi"):
+                bits.append(f"Confirmed QI: {item['confirmed_qi']}")
+            links = item.get("links") or []
+            link_md = ""
+            if links and links[0].get("url"):
+                resolved_u = _rewrite_support_url_for_display(links[0]["url"])
+                link_md = f" — [Open Reference]({resolved_u})"
+            c_lines.append(f"- **[KB-{idx}]** {item.get('title', 'Tip')} ({' • '.join(bits)}){link_md}")
+    if video_bundle:
+        rec = video_bundle.get("recommended_video")
+        if rec and rec.get("url"):
+            sol_lbl = video_bundle.get("solution_id") or "Video Guide"
+            res_url = video_bundle.get("resolved_url") or rec["url"]
+            c_lines.append(
+                f"\n- **🎬 Redirected Video Stream ({sol_lbl}):** "
+                f"[▶ Play {rec['title']}]({rec['url']}) • [Support Page]({res_url})"
+            )
+        for man in (video_bundle.get("manuals") or [])[:2]:
+            if man.get("url"):
+                c_lines.append(f"- **📘 Hardware Maintenance Manual:** [{man.get('title', 'HMM PDF')}]({man['url']})")
     return "\n".join(c_lines)
 
 
-def _format_kb_offline_fallback(query: str, kb_matches: List[Dict[str, Any]]) -> str:
+def _format_kb_offline_fallback(
+    query: str,
+    kb_matches: List[Dict[str, Any]],
+    video_bundle: Optional[Dict[str, Any]] = None,
+) -> str:
     """Formats structured Lenovo KB troubleshooting cards when local LLM is offline or skipped."""
-    if not kb_matches:
+    if not kb_matches and not (video_bundle and video_bundle.get("videos")):
         return f"No matching records found in `Tips & Resources` for `{query}`."
     lines = [f"### 📚 Lenovo Tips & Resources Matches for: `{query}`\n"]
+    if video_bundle and video_bundle.get("recommended_video"):
+        rec = video_bundle["recommended_video"]
+        lines.append(
+            f"**🎬 Matched Part Removal Video:** **{rec.get('title', 'Video')}** "
+            f"([▶ Direct Video]({rec.get('url', '')}) • [Redirected Support Page]({video_bundle.get('resolved_url', '')}))\n"
+        )
+        if video_bundle.get("videos"):
+            lines.append(f"- **Available Component Videos ({len(video_bundle['videos'])}):** " + ", ".join(v.get("title", "") for v in video_bundle["videos"][:12]) + (" ..." if len(video_bundle["videos"]) > 12 else ""))
+        for man in (video_bundle.get("manuals") or [])[:2]:
+            lines.append(f"- **Hardware Maintenance Manual:** [{man.get('title', 'HMM PDF')}]({man.get('url', '')})")
+        lines.append("")
     for idx, item in enumerate(kb_matches[:6], start=1):
         lines.append(f"#### [KB-{idx}] {item.get('title', 'Untitled')} ({item.get('source_label', '')})")
         meta = []
@@ -2767,9 +2801,269 @@ def _format_kb_offline_fallback(query: str, kb_matches: List[Dict[str, Any]]) ->
             lines.append("- **Parts & Codes:** " + " • ".join(parts))
         for lk in item.get("links") or []:
             if lk.get("url"):
-                lines.append(f"- **Link:** [{lk.get('label', 'Reference Link')}]({lk['url']})")
+                lines.append(f"- **Link:** [{lk.get('label', 'Reference Link')}]({_rewrite_support_url_for_display(lk['url'])})")
         lines.append(f"- **Source:** `{item.get('source_file', '')}` ({item.get('sheet_name', '')}, Row {item.get('row_number', '')})\n")
     return "\n".join(lines)
+
+
+_KB_VIDEO_INTENT_RE = re.compile(
+    r"\b(?:video|videos|removal|remove|replace|replacement|disassembl\w*|teardown|play|watch|fru|cru|ht\d{4,})\b",
+    re.IGNORECASE,
+)
+_LENOVO_SOLUTION_URL_RE = re.compile(
+    r"https?://(?:pc)?support\.lenovo\.com/[^\s\)\"'>]+/solutions/(HT\d{4,})",
+    re.IGNORECASE,
+)
+_DIRECT_VIDEO_LINK_RE = re.compile(
+    r"https?://[^\s\)\"'>]+\.(?:mp4|webm|m4v|mov|m3u8)(?:\?[^\s\)\"'>]*)?|https?://(?:www\.)?(?:youtube\.com/(?:watch\?[^#\s\)]*v=|embed/|shorts/)|youtu\.be/)[^\s\)\"'>]+",
+    re.IGNORECASE,
+)
+_KB_VIDEO_META_COMMENT_RE = re.compile(r"\n*<!--\s*kb_video_meta:(\{.*?\})\s*-->", re.DOTALL)
+
+
+def _rewrite_support_url_for_display(url: str) -> str:
+    m = _LENOVO_SOLUTION_URL_RE.search(url or "")
+    if m and "support.lenovo.com" in (url or "").lower():
+        return f"https://pcsupport.lenovo.com/us/en/solutions/{m.group(1).lower()}"
+    return url
+
+
+def _ensure_kb_video_resolver():
+    """Ensures `lenovo_kb_service` exposes `resolve_solution_videos` even in hot-reloaded workers."""
+    global lenovo_kb_service
+    if not hasattr(lenovo_kb_service, "resolve_solution_videos"):
+        import importlib
+        import app.services.lenovo_kb_service as _kb_mod
+        importlib.reload(_kb_mod)
+        lenovo_kb_service = _kb_mod.lenovo_kb_service
+    return lenovo_kb_service
+
+
+def _find_kb_video_targets(kb_matches: List[Dict[str, Any]]) -> List[Dict[str, str]]:
+    """Collects resolvable video/solution URLs from matched KB entries, prioritizing video_guide records."""
+    ordered = sorted(
+        kb_matches or [],
+        key=lambda m: (0 if m.get("source_type") == "video_guide" else 1),
+    )
+    targets: List[Dict[str, str]] = []
+    seen_urls: set = set()
+    for item in ordered:
+        for lk in item.get("links") or []:
+            u = str((lk or {}).get("url") or "").strip()
+            if not u or u in seen_urls:
+                continue
+            is_video_url = bool(
+                item.get("source_type") == "video_guide"
+                or _LENOVO_SOLUTION_URL_RE.search(u)
+                or _DIRECT_VIDEO_LINK_RE.search(u)
+                or "video" in str((lk or {}).get("label") or "").lower()
+            )
+            if is_video_url:
+                seen_urls.add(u)
+                targets.append({
+                    "url": u,
+                    "label": str((lk or {}).get("label") or "Part Removal Video"),
+                    "entry_title": str(item.get("title") or "Lenovo Part Removal Video"),
+                    "source_type": str(item.get("source_type") or ""),
+                })
+    return targets
+
+
+def _resolve_chat_kb_videos(query: str, kb_matches: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Redirects Lenovo solution links and extracts playable videos matching the user's part/model query."""
+    svc = _ensure_kb_video_resolver()
+    targets = _find_kb_video_targets(kb_matches)
+    if not targets:
+        url_m = _LENOVO_SOLUTION_URL_RE.search(query or "") or _DIRECT_VIDEO_LINK_RE.search(query or "")
+        if url_m:
+            raw_u = url_m.group(0)
+            targets = [{
+                "url": raw_u,
+                "label": "Lenovo Video Guide",
+                "entry_title": f"Lenovo Solution {url_m.group(1).upper()}" if _LENOVO_SOLUTION_URL_RE.match(raw_u) else "Video Guide",
+                "source_type": "video_guide",
+            }]
+    if not targets:
+        return None
+
+    top_is_video = bool(kb_matches and kb_matches[0].get("source_type") == "video_guide")
+    has_video_intent = bool(_KB_VIDEO_INTENT_RE.search(query or ""))
+    if not (top_is_video or has_video_intent or targets[0].get("source_type") == "video_guide"):
+        return None
+
+    primary = targets[0]
+    try:
+        res = svc.resolve_solution_videos(primary["url"], query_hint=query)
+    except Exception:
+        return None
+
+    return {
+        "entry_title": primary["entry_title"],
+        "solution_id": res.get("solution_id", ""),
+        "original_url": res.get("original_url", primary["url"]),
+        "resolved_url": res.get("resolved_url", primary["url"]),
+        "videos": res.get("videos") or [],
+        "recommended_video": res.get("recommended_video"),
+        "best_index": int(res.get("best_index") or 0),
+        "manuals": res.get("manuals") or [],
+        "query_hint": query,
+        "error": res.get("error", ""),
+    }
+
+
+def _format_resolved_video_llm_context(video_bundle: Dict[str, Any]) -> str:
+    """Formats resolved direct video URLs and manuals into the LLM system prompt."""
+    if not video_bundle:
+        return ""
+    lines = [
+        "### Resolved Part Removal Video Stream (Already Verified & Auto-Playing Inline):",
+        f"- **Model / Guide:** {video_bundle.get('entry_title', 'Lenovo Part Removal Video')}",
+        f"- **Redirected Page:** {video_bundle.get('resolved_url', video_bundle.get('original_url', ''))}",
+    ]
+    rec = video_bundle.get("recommended_video")
+    if rec:
+        lines.append(f"- **Auto-Selected Video:** `{rec.get('title', 'Video')}` -> {rec.get('url', '')}")
+    vids = video_bundle.get("videos") or []
+    if vids:
+        sample = ", ".join(v.get("title", "") for v in vids[:15] if v.get("title"))
+        lines.append(f"- **All Extracted Part Videos ({len(vids)} total):** {sample}")
+    for man in (video_bundle.get("manuals") or [])[:2]:
+        lines.append(f"- **Hardware Maintenance Manual (PDF):** {man.get('title', 'HMM')} -> {man.get('url', '')}")
+    lines.append(
+        "- **Instruction:** Tell the user directly which component video was matched and is now playing below the response, list a few helpful prerequisite steps if relevant (e.g., disable built-in battery / ESD precaution), and do NOT say you cannot open links or play videos."
+    )
+    return "\n".join(lines)
+
+
+def _build_kb_video_metadata_comment(video_bundle: Optional[Dict[str, Any]]) -> str:
+    """Embeds a tiny invisible JSON comment so chat messages preserve playable video metadata across reruns/reloads."""
+    if not video_bundle or not (video_bundle.get("resolved_url") or video_bundle.get("original_url")):
+        return ""
+    payload = {
+        "entry_title": str(video_bundle.get("entry_title") or "")[:120],
+        "solution_id": str(video_bundle.get("solution_id") or "")[:32],
+        "original_url": str(video_bundle.get("original_url") or "")[:240],
+        "resolved_url": str(video_bundle.get("resolved_url") or "")[:240],
+        "query_hint": str(video_bundle.get("query_hint") or "")[:180],
+    }
+    rec = video_bundle.get("recommended_video") or {}
+    if rec.get("url"):
+        payload["recommended_url"] = str(rec["url"])[:320]
+        payload["recommended_title"] = str(rec.get("title") or "")[:120]
+    return "\n\n<!-- kb_video_meta:" + json.dumps(payload, separators=(",", ":")) + " -->"
+
+
+def _strip_kb_video_meta_comment(content: str) -> str:
+    return _KB_VIDEO_META_COMMENT_RE.sub("", content or "").strip()
+
+
+def _extract_kb_video_meta_from_text(content: str) -> Optional[Dict[str, Any]]:
+    """Extracts persisted video bundle metadata (or direct pcsupport/mp4 links) from saved assistant markdown."""
+    txt = content or ""
+    m = _KB_VIDEO_META_COMMENT_RE.search(txt)
+    if m:
+        try:
+            meta = json.loads(m.group(1))
+            if isinstance(meta, dict) and (meta.get("resolved_url") or meta.get("original_url") or meta.get("recommended_url")):
+                return meta
+        except Exception:
+            pass
+    # Fallback: detect direct MP4/YouTube stream or Lenovo solution link in message
+    sol_m = _LENOVO_SOLUTION_URL_RE.search(txt)
+    dir_m = _DIRECT_VIDEO_LINK_RE.search(txt)
+    if sol_m or dir_m:
+        u = sol_m.group(0) if sol_m else dir_m.group(0)
+        return {
+            "entry_title": f"Lenovo Video Guide ({sol_m.group(1).upper()})" if sol_m else "Part Removal Video",
+            "solution_id": sol_m.group(1).upper() if sol_m else "",
+            "original_url": u,
+            "resolved_url": _rewrite_support_url_for_display(u),
+            "query_hint": "",
+            "recommended_url": dir_m.group(0) if dir_m else "",
+        }
+    return None
+
+
+def _render_kb_video_player(
+    bundle_or_meta: Dict[str, Any],
+    key_prefix: str,
+    autoplay: bool = False,
+) -> None:
+    """Renders an interactive inline HTML5/YouTube video player with component switcher."""
+    if not bundle_or_meta:
+        return
+
+    videos = list(bundle_or_meta.get("videos") or [])
+    manuals = list(bundle_or_meta.get("manuals") or [])
+    resolved_url = bundle_or_meta.get("resolved_url") or bundle_or_meta.get("original_url") or ""
+    best_idx = int(bundle_or_meta.get("best_index") or 0)
+    err_msg = str(bundle_or_meta.get("error") or "")
+
+    # Re-hydrate full part list dynamically if loaded from DB history (hits 1-hour cache in <1ms when warm)
+    if not videos and resolved_url:
+        try:
+            svc = _ensure_kb_video_resolver()
+            res = svc.resolve_solution_videos(
+                resolved_url,
+                query_hint=str(bundle_or_meta.get("query_hint") or ""),
+            )
+            videos = res.get("videos") or []
+            manuals = res.get("manuals") or manuals
+            best_idx = int(res.get("best_index") or 0)
+            resolved_url = res.get("resolved_url") or resolved_url
+            err_msg = str(res.get("error") or "")
+        except Exception:
+            pass
+
+    if not videos and bundle_or_meta.get("recommended_url"):
+        videos = [{
+            "title": bundle_or_meta.get("recommended_title") or "Part Removal Video",
+            "url": bundle_or_meta["recommended_url"],
+            "video_type": "mp4",
+            "action_type": "removal",
+        }]
+        best_idx = 0
+
+    entry_title = bundle_or_meta.get("entry_title") or "Lenovo Part Removal Video"
+    sol_id = bundle_or_meta.get("solution_id") or ""
+    sol_badge = f" (`{sol_id}`)" if sol_id else ""
+
+    if videos:
+        with st.container(border=True):
+            st.markdown(f"**🎬 {entry_title}{sol_badge} — Auto-Matched Video Player**")
+            if len(videos) > 1:
+                safe_default = best_idx if 0 <= best_idx < len(videos) else 0
+                sel_idx = st.selectbox(
+                    f"Component Video ({len(videos)} part videos on this page)",
+                    options=list(range(len(videos))),
+                    index=safe_default,
+                    format_func=lambda i: (
+                        f"▶ {videos[i].get('title', 'Video')} "
+                        f"[{str(videos[i].get('action_type', 'guide')).title()}]"
+                    ),
+                    key=f"{key_prefix}_part_sel",
+                )
+            else:
+                sel_idx = 0
+
+            chosen = videos[sel_idx]
+            prev_sel_key = f"{key_prefix}_prev_sel"
+            part_changed = (prev_sel_key in st.session_state and st.session_state[prev_sel_key] != sel_idx)
+            st.session_state[prev_sel_key] = sel_idx
+
+            play_now = bool(autoplay or part_changed)
+            st.video(chosen["url"], autoplay=play_now)
+
+            link_bits = [f"[⬇ Direct MP4 / Video Link]({chosen['url']})"]
+            if resolved_url:
+                link_bits.append(f"[🔗 Redirected Support Page ({sol_id or 'Lenovo'})]({resolved_url})")
+            for man in manuals[:1]:
+                if man.get("url"):
+                    link_bits.append(f"[📘 {man.get('title', 'HMM PDF')}]({man['url']})")
+            st.caption(" • ".join(link_bits))
+    elif resolved_url:
+        note = f" ({err_msg})" if err_msg else ""
+        st.info(f"🔗 Redirected support link ready{note}: [{resolved_url}]({resolved_url})")
 
 
 def render_lenovo_kb_explorer():
@@ -2809,6 +3103,7 @@ def render_lenovo_kb_explorer():
         "known_tip": "💡 Known Tips",
         "leap_tip": "🚀 LEAP Tips",
         "tech_tip": "📅 Thursday Tech Tips",
+        "video_guide": "🎬 Part Removal Videos",
         "document": "📄 Documents & PDFs",
     }
     with f1:
@@ -2899,7 +3194,30 @@ def render_lenovo_kb_explorer():
                     st.markdown("**Official Reference Links:**")
                     for lk in item["links"]:
                         if lk.get("url"):
-                            st.markdown(f"- [{lk.get('label', 'Open Document')}]({lk['url']})")
+                            disp_u = _rewrite_support_url_for_display(lk["url"])
+                            st.markdown(f"- [{lk.get('label', 'Open Document')}]({disp_u})")
+
+                _exp_v_targets = _find_kb_video_targets([item])
+                if _exp_v_targets:
+                    _vid_key = f"kb_exp_play_{item['id']}"
+                    _vid_auto_key = f"kb_exp_autoplay_{item['id']}"
+                    _auto_expand_vid = bool(kb_query.strip()) and idx <= 2
+                    if _auto_expand_vid or st.session_state.get(_vid_key):
+                        _exp_v_bundle = _resolve_chat_kb_videos(
+                            kb_query.strip() or item.get("title", ""),
+                            [item],
+                        )
+                        if _exp_v_bundle:
+                            _render_kb_video_player(
+                                _exp_v_bundle,
+                                key_prefix=f"kb_exp_{item['id']}_{idx}",
+                                autoplay=bool(st.session_state.pop(_vid_auto_key, False)),
+                            )
+                    else:
+                        if st.button("🎬 Load & Play Part Removal Video(s)", key=f"btn_play_{item['id']}_{idx}"):
+                            st.session_state[_vid_key] = True
+                            st.session_state[_vid_auto_key] = True
+                            st.rerun()
 
                 item_assets = [a for a in (item.get("assets") or []) if a.get("path") and os.path.exists(a["path"])]
                 if item_assets:
@@ -3573,6 +3891,22 @@ if selected_page in ["💬 Chat", "💬 All-in-One Studio", "Chat", "All-in-One 
                 render_executive_report_view(msg["content"], default_title=active_title, key_prefix=f"hist_rep_{idx}")
             else:
                 st.markdown(msg["content"], unsafe_allow_html=True)
+            if msg.get("role") == "assistant":
+                _curr_conv_id = st.session_state.get("active_conv_id", "default")
+                _hist_vid_key = f"{_curr_conv_id}:{idx}"
+                _hist_video_bundle = (
+                    (st.session_state.get("msg_video_bundles") or {}).get(_hist_vid_key)
+                    or _extract_kb_video_meta_from_text(msg.get("content", ""))
+                )
+                if _hist_video_bundle:
+                    _should_autoplay = (st.session_state.get("autoplay_video_key") == _hist_vid_key)
+                    if _should_autoplay:
+                        st.session_state["autoplay_video_key"] = ""
+                    _render_kb_video_player(
+                        _hist_video_bundle,
+                        key_prefix=f"chat_vid_{_curr_conv_id}_{idx}",
+                        autoplay=_should_autoplay,
+                    )
 
     # Dockable Chatbox Model Selector Container (Auto-docked directly inside st.chat_input via JS)
     def on_chat_model_change():
@@ -3986,34 +4320,49 @@ if selected_page in ["💬 Chat", "💬 All-in-One Studio", "Chat", "All-in-One 
                 kb_matches = []
                 kb_citations_md = ""
                 kb_matched_assets = []
+                kb_video_bundle = None
+                _kb_svc = _ensure_kb_video_resolver()
 
                 response_placeholder = st.empty()
 
                 # Internal Lenovo Tips & Resources Knowledge Base Lookup (runs locally before external web search)
-                if explicit_kb or lenovo_kb_service.detect_lenovo_intent(kb_query_target):
+                if explicit_kb or _kb_svc.detect_lenovo_intent(kb_query_target) or bool(_LENOVO_SOLUTION_URL_RE.search(kb_query_target)):
                     response_placeholder.markdown(
                         render_thinking_badge("analysing", f"Searching Lenovo Tips & Resources KB for '{kb_query_target[:42]}' ..."),
                         unsafe_allow_html=True,
                     )
                     try:
-                        kb_matches = lenovo_kb_service.search(
+                        kb_matches = _kb_svc.search(
                             kb_query_target,
                             limit=6,
                             min_score=10.0 if explicit_kb else 30.0,
                         )
+                        kb_video_bundle = _resolve_chat_kb_videos(kb_query_target, kb_matches)
                         if kb_matches:
-                            kb_ctx_str = lenovo_kb_service.format_context_for_llm(kb_query_target, kb_matches)
+                            kb_ctx_str = _kb_svc.format_context_for_llm(kb_query_target, kb_matches)
                             effective_system += f"\n\n---\n{kb_ctx_str}"
-                            kb_citations_md = _build_kb_citations_markdown(kb_matches)
                             kb_matched_assets = _collect_kb_assets(kb_matches)
+                        if kb_video_bundle:
+                            _vid_ctx_str = _format_resolved_video_llm_context(kb_video_bundle)
+                            if _vid_ctx_str:
+                                effective_system += f"\n\n{_vid_ctx_str}"
+                        if kb_matches or kb_video_bundle:
+                            kb_citations_md = _build_kb_citations_markdown(
+                                kb_matches, video_bundle=kb_video_bundle
+                            )
                     except Exception:
                         kb_matches = []
+                        kb_video_bundle = None
 
                 # Check for live web search intent or explicit /search command
                 search_query_target = None
                 if clean_prompt.startswith(("/search ", "!search ", "/web ")):
                     search_query_target = clean_prompt.split(maxsplit=1)[1].strip()
-                elif not explicit_kb and st.session_state.get("enable_web_search_val", True):
+                elif (
+                    not explicit_kb
+                    and st.session_state.get("enable_web_search_val", True)
+                    and not (kb_video_bundle and kb_video_bundle.get("videos"))
+                ):
                     search_query_target = web_search_service.detect_search_intent(clean_prompt)
 
                 search_citations_md = ""
@@ -4041,7 +4390,7 @@ if selected_page in ["💬 Chat", "💬 All-in-One Studio", "Chat", "All-in-One 
                 # Format conversation history for Ollama
                 ollama_messages = [{"role": "system", "content": effective_system}]
                 for m in st.session_state.messages[-10:]:
-                    msg_item = {"role": m["role"], "content": m["content"]}
+                    msg_item = {"role": m["role"], "content": _strip_kb_video_meta_comment(m["content"])}
                     if m.get("raw_images"):
                         msg_item["images"] = m["raw_images"]
                     ollama_messages.append(msg_item)
@@ -4180,28 +4529,38 @@ if selected_page in ["💬 Chat", "💬 All-in-One Studio", "Chat", "All-in-One 
                     if search_citations_md and search_citations_md not in full_response:
                         full_response += search_citations_md
 
+                    _vid_meta_comment = _build_kb_video_metadata_comment(kb_video_bundle)
+                    if _vid_meta_comment and "<!-- kb_video_meta:" not in full_response:
+                        full_response += _vid_meta_comment
+
                     assistant_images = [a["data_uri"] for a in kb_matched_assets if a.get("data_uri")]
 
                     if is_report_content(full_response):
                         response_placeholder.empty()
                         render_executive_report_view(full_response, default_title=active_title, key_prefix="live_chat_rep")
                     else:
-                        response_placeholder.markdown(full_response)
+                        response_placeholder.markdown(full_response, unsafe_allow_html=True)
 
                     if assistant_images:
                         cols_kb_img = st.columns(min(len(assistant_images), 3))
                         for k_i, k_uri in enumerate(assistant_images):
                             cols_kb_img[k_i % len(cols_kb_img)].image(k_uri, caption=kb_matched_assets[k_i]["caption"], use_container_width=True)
 
+                    if kb_video_bundle:
+                        _new_msg_key = f"{st.session_state['active_conv_id']}:{len(st.session_state.messages)}"
+                        st.session_state.setdefault("msg_video_bundles", {})[_new_msg_key] = kb_video_bundle
+                        if kb_video_bundle.get("videos"):
+                            st.session_state["autoplay_video_key"] = _new_msg_key
+
                     save_chat_message(st.session_state["active_conv_id"], "assistant", full_response, assistant_images)
                     st.session_state.messages.append({"role": "assistant", "content": full_response, "images": assistant_images})
-                    _ev_kind = "search" if search_query_target else ("tips" if (explicit_kb or kb_matches) else "chat")
+                    _ev_kind = "search" if search_query_target else ("tips" if (explicit_kb or kb_matches or kb_video_bundle) else "chat")
                     _ev_detail = (
                         f"Web search: {search_query_target[:60]}"
                         if search_query_target
                         else (
                             f"Lenovo KB ({len(kb_matches)} matches): {kb_query_target[:50]}"
-                            if (explicit_kb or kb_matches)
+                            if (explicit_kb or kb_matches or kb_video_bundle)
                             else (f"{len(incoming_files)} attachment(s)" if incoming_files else "Chat completion")
                         )
                     )
@@ -4218,11 +4577,21 @@ if selected_page in ["💬 Chat", "💬 All-in-One Studio", "Chat", "All-in-One 
 
                 except Exception as e:
                     err_msg = str(e).strip()
-                    if kb_matches and (explicit_kb or lenovo_kb_service.detect_lenovo_intent(kb_query_target)):
-                        fallback_md = _format_kb_offline_fallback(kb_query_target, kb_matches)
+                    if (kb_matches or (kb_video_bundle and kb_video_bundle.get("videos"))) and (
+                        explicit_kb or _kb_svc.detect_lenovo_intent(kb_query_target) or bool(kb_video_bundle)
+                    ):
+                        fallback_md = _format_kb_offline_fallback(kb_query_target, kb_matches, video_bundle=kb_video_bundle)
                         fallback_md += f"\n\n> ℹ️ *Displayed verified offline records directly from `Tips & Resources` (Local LLM unavailable: {err_msg[:120] or type(e).__name__}).*"
+                        _vid_meta_comment = _build_kb_video_metadata_comment(kb_video_bundle)
+                        if _vid_meta_comment and "<!-- kb_video_meta:" not in fallback_md:
+                            fallback_md += _vid_meta_comment
                         assistant_images = [a["data_uri"] for a in kb_matched_assets if a.get("data_uri")]
-                        response_placeholder.markdown(fallback_md)
+                        response_placeholder.markdown(fallback_md, unsafe_allow_html=True)
+                        if kb_video_bundle:
+                            _new_msg_key = f"{st.session_state['active_conv_id']}:{len(st.session_state.messages)}"
+                            st.session_state.setdefault("msg_video_bundles", {})[_new_msg_key] = kb_video_bundle
+                            if kb_video_bundle.get("videos"):
+                                st.session_state["autoplay_video_key"] = _new_msg_key
                         save_chat_message(st.session_state["active_conv_id"], "assistant", fallback_md, assistant_images)
                         st.session_state.messages.append({"role": "assistant", "content": fallback_md, "images": assistant_images})
                         audit_service.record_event(
