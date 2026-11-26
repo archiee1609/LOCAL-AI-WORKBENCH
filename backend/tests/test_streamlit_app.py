@@ -14,6 +14,8 @@ def test_streamlit_unauthenticated_shows_login_portal():
     assert len(login_titles) > 0
     # Username and Password fields are rendered
     assert len(at.text_input) >= 2
+    # Governance rules & registered accounts list must NOT be exposed on login portal
+    assert not any("Registered User Accounts:" in m.value for m in at.markdown)
 
 
 def test_streamlit_app_renders_when_authenticated():
@@ -40,25 +42,49 @@ def test_streamlit_app_renders_when_authenticated():
     # Ensure no raw unclosed or pre-formatted code block escapes
     assert "```" not in banner_markdowns[0]
 
+    # Verify Chat History was moved out of sidebar into top-right header dropdown, and Options popover was removed
+    assert not any("Recent Chats" in m.value for m in at.sidebar.markdown)
+    assert any(ti.key == "header_chat_history_filter" for ti in at.text_input)
+    assert not any(ti.key == "rename_chat_input" for ti in at.text_input)
+
 
 def test_streamlit_settings_page_renders_cleanly():
-    """Headless test verifying Settings page and Hardware & Acceleration card render cleanly."""
+    """Headless test verifying Settings lives under Admin Account Management tab and is hidden for non-admin users."""
     app_path = Path(__file__).parent.parent.parent / "streamlit_app.py"
-    at = AppTest.from_file(str(app_path.resolve()), default_timeout=30)
-    at.session_state["authenticated_user"] = {
+
+    # 1. Regular User must NOT see Settings in sidebar navigation
+    at_user = AppTest.from_file(str(app_path.resolve()), default_timeout=30)
+    at_user.session_state["authenticated_user"] = {
         "name": "Archiman Chakraborty",
         "username": "achakrabort4",
         "role": "User",
         "workspace_path": str(Path(__file__).parent.parent.parent / "workspace" / "achakrabort4")
     }
-    at.run()
-    assert len(at.exception) == 0
+    at_user.run()
+    assert len(at_user.exception) == 0
+    if len(at_user.sidebar.radio) > 0:
+        user_opts = at_user.sidebar.radio[0].options
+        assert not any("Settings" in opt for opt in user_opts)
 
-    if len(at.sidebar.radio) > 0:
-        at.sidebar.radio[0].set_value("⚙️ Settings").run()
-        assert len(at.exception) == 0
-        settings_markdowns = [m.value for m in at.markdown if "Settings" in m.value or "Engines & Diagnostics" in m.value]
-        assert len(settings_markdowns) > 0
+    # 2. Admin sees Settings inside Account Management tabs and Hardware & Acceleration renders cleanly
+    at_admin = AppTest.from_file(str(app_path.resolve()), default_timeout=30)
+    at_admin.session_state["authenticated_user"] = {
+        "name": "Admin",
+        "username": "admin",
+        "role": "Admin",
+        "workspace_path": str(Path(__file__).parent.parent.parent / "workspace" / "admin")
+    }
+    at_admin.run()
+    assert len(at_admin.exception) == 0
+    admin_opts = at_admin.sidebar.radio[0].options
+    assert not any("Settings" in opt for opt in admin_opts)
+
+    acc_opt = next(opt for opt in admin_opts if "Account Management" in opt)
+    at_admin.sidebar.radio[0].set_value(acc_opt).run()
+    assert len(at_admin.exception) == 0
+    settings_markdowns = [m.value for m in at_admin.markdown if "Settings" in m.value or "Engines & Diagnostics" in m.value]
+    assert len(settings_markdowns) > 0
+    assert any("Registered User Accounts:" in m.value for m in at_admin.markdown)
 
 
 def test_render_winxp_progress_bar_downloading_and_complete():
@@ -177,6 +203,9 @@ def test_streamlit_account_management_admin_page_renders_cleanly():
     assert len(at.exception) == 0
     acc_markdowns = [m.value for m in at.markdown if "Account Management & Load Balancer" in m.value]
     assert len(acc_markdowns) > 0
+    # Verify Admin password reset control is present in User Accounts tab
+    assert any(t.key == "upd_pwd_new" for t in at.text_input)
+    assert any(s.key == "upd_pwd_target_user" for s in at.selectbox)
 
     # 2. Non-Admin simulation
     at_user = AppTest.from_file(str(app_path.resolve()), default_timeout=30)

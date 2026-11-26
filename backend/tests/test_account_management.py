@@ -130,6 +130,62 @@ def test_rule1_admin_only_add_and_remove(temp_excel_service):
     assert temp_excel_service.get_user_by_username("alice") is None
 
 
+def test_rule1_admin_only_update_password(temp_excel_service):
+    """Admin can update/reset forgotten user passwords in Account Management.xlsx; non-admin blocked."""
+    # Non-admin blocked
+    with pytest.raises(PermissionError) as exc_upd:
+        temp_excel_service.update_password("achakrabort4", "NewPass999", actor_role="User")
+    assert "Only Admin can update user passwords" in str(exc_upd.value)
+
+    # Admin updates user password
+    res = temp_excel_service.update_password("achakrabort4", "ResetPass@2026", actor_role="Admin")
+    assert res["updated"] is True
+    assert res["username"] == "achakrabort4"
+
+    # Old password rejected, new password works
+    assert temp_excel_service.authenticate("achakrabort4", "Lenovo@123") is None
+    authed = temp_excel_service.authenticate("achakrabort4", "ResetPass@2026")
+    assert authed is not None
+    assert authed["username"] == "achakrabort4"
+
+    # Invalid inputs rejected
+    with pytest.raises(ValueError):
+        temp_excel_service.update_password("achakrabort4", "ab", actor_role="Admin")
+    with pytest.raises(ValueError):
+        temp_excel_service.update_password("nonexistent_user", "ValidPass1", actor_role="Admin")
+
+
+def test_password_reset_api_rbac_and_flow(tmp_path):
+    """API PATCH /api/accounts/users/{username}/password enforces Admin RBAC & updates isolated Excel."""
+    from unittest.mock import patch
+    from app.api import accounts as acc_api_mod
+
+    excel_src = settings.base_dir / "Account Management.xlsx"
+    temp_excel = tmp_path / "Account Management.xlsx"
+    shutil.copy(str(excel_src), str(temp_excel))
+    iso_acc = AccountService(excel_path=temp_excel)
+
+    with patch.object(acc_api_mod, "account_service", iso_acc):
+        # Non-admin rejected with 403
+        res_forbidden = client.patch(
+            "/api/accounts/users/crakha1/password?actor_role=User",
+            json={"new_password": "UserTry123"},
+        )
+        assert res_forbidden.status_code == 403
+
+        # Admin resets password -> 200
+        res_ok = client.patch(
+            "/api/accounts/users/crakha1/password?actor_role=Admin&actor_username=admin",
+            json={"new_password": "FreshPass@456"},
+        )
+        assert res_ok.status_code == 200
+        assert res_ok.json()["success"] is True
+
+        # Verify updated credentials authenticate cleanly
+        assert iso_acc.authenticate("crakha1", "Lenovo@123") is None
+        assert iso_acc.authenticate("crakha1", "FreshPass@456") is not None
+
+
 def test_rule4_multi_user_load_balancer():
     """Rule 4: MultiUserLoadBalancer manages concurrency and session tracking."""
     lb = MultiUserLoadBalancer()

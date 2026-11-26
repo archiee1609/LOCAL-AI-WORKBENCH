@@ -1538,29 +1538,7 @@ def render_login_portal():
                     else:
                         st.error("Invalid username or password. Please verify credentials in 'Account Management.xlsx'.")
 
-        with st.expander("ℹ️ Account Management Rules & Governance", expanded=False):
-            rules = account_service.get_governance_rules()
-            if rules:
-                for r in rules:
-                    if "Rule for" in r:
-                        st.markdown(f"**{r}**")
-                    else:
-                        st.markdown(f"- {r}")
-            else:
-                st.markdown("""
-                - 1. Only Admin can add or remove user
-                - 2. Every user should have separate workspace (`workspace/<username>`)
-                - 3. Multiple users can log in and use application concurrently
-                - 4. Use a load balancer to smooth operation
-                - 5. Use `Account Management.xlsx` as the sole database
-                """)
-
-            st.divider()
-            st.markdown("**Registered User Accounts:**")
-            users_list = account_service.get_all_users()
-            for u in users_list:
-                role_icon = "👑" if u.get("role", "").lower() == "admin" else "👤"
-                st.markdown(f"- {role_icon} **{u['name']}** (`@{u['username']}`) — *{u['role']}*")
+        st.caption("🔑 Forgot your password? Contact your Administrator to reset it via Account Management.")
 
 # ---------------------------------------------------------
 # AUTHENTICATION & MULTI-USER SESSION STATE (Account Management.xlsx)
@@ -1659,22 +1637,21 @@ with st.sidebar:
             st.rerun()
 
     # Module Navigation
-    # Rule 1: Only Admin can access Account Management & Usage Audit
+    # Rule 1: Only Admin can access Account Management, Usage Audit & System Settings
     if is_admin:
-        default_nav = ["💬 Chat", "📚 Lenovo Tips & Issues", "👥 Account Management", "📊 Audit & Analytics", "⚙️ Settings"]
+        default_nav = ["💬 Chat", "📚 Lenovo Tips & Issues", "👥 Account Management", "📊 Audit & Analytics"]
     else:
-        default_nav = ["💬 Chat", "📚 Lenovo Tips & Issues", "⚙️ Settings"]
+        default_nav = ["💬 Chat", "📚 Lenovo Tips & Issues"]
 
     ALL_MODULE_PAGES = [
         "💬 Chat",
         "📚 Lenovo Tips & Issues",
         "👥 Account Management" if is_admin else None,
         "📊 Audit & Analytics" if is_admin else None,
-        "⚙️ Settings",
-        "🧠 AI Tool Memory Hub",
+        "🧠 AI Tool Memory Hub" if is_admin else None,
         "💻 Autonomous Coding Agent",
         "👁️ Vision Multimodal",
-        "⚙️ Diagnostics & Models"
+        "⚙️ Diagnostics & Models" if is_admin else None,
     ]
     ALL_MODULE_PAGES = [p for p in ALL_MODULE_PAGES if p]
     show_all_modules = st.query_params.get("show_all") in ["1", "true"]
@@ -1687,7 +1664,7 @@ with st.sidebar:
             if (
                 req_page.lower() in opt.lower()
                 or (req_page.lower() in ["kb", "tips", "lenovo"] and "lenovo" in opt.lower())
-                or (req_page.lower() in ["more", "settings"] and "settings" in opt.lower())
+                or (req_page.lower() in ["more", "settings"] and is_admin and "account management" in opt.lower())
                 or (req_page.lower() in ["chat", "studio"] and "chat" in opt.lower())
             ):
                 page_idx = i
@@ -1721,43 +1698,6 @@ with st.sidebar:
     if "loaded_conv_id" not in st.session_state or st.session_state["loaded_conv_id"] != st.session_state["active_conv_id"]:
         st.session_state["messages"] = load_conversation_messages(st.session_state["active_conv_id"], user_id=curr_uname)
         st.session_state["loaded_conv_id"] = st.session_state["active_conv_id"]
-
-    # 🕒 Chat History Sidebar (Gemini & ChatGPT style)
-    st.markdown("##### 🕒 Recent Chats")
-    with st.container(height=260):
-        for conv in all_conversations:
-            is_active = (conv["id"] == st.session_state["active_conv_id"])
-            col_c1, col_c2 = st.columns([5, 1])
-            with col_c1:
-                raw_t = conv.get("title") or "New Chat"
-                display_t = raw_t if len(raw_t) <= 19 else raw_t[:17] + "..."
-                label = f"▸ {display_t}" if is_active else f"  {display_t}"
-                if st.button(
-                    label,
-                    key=f"ch_{conv['id']}",
-                    use_container_width=True,
-                    help=f"{raw_t}\nModel: {conv.get('model', 'gemma4:12b')} • Messages: {conv.get('msg_count', 0)}"
-                ):
-                    st.session_state["active_conv_id"] = conv["id"]
-                    st.session_state["messages"] = load_conversation_messages(conv["id"], user_id=curr_uname)
-                    st.session_state["loaded_conv_id"] = conv["id"]
-                    st.rerun()
-            with col_c2:
-                if st.button("✕", key=f"del_{conv['id']}", help="Delete chat", use_container_width=True):
-                    delete_conversation(conv["id"], user_id=curr_uname)
-                    rem = [c for c in all_conversations if c["id"] != conv["id"]]
-                    if rem:
-                        st.session_state["active_conv_id"] = rem[0]["id"]
-                        st.session_state["messages"] = load_conversation_messages(rem[0]["id"], user_id=curr_uname)
-                        st.session_state["loaded_conv_id"] = rem[0]["id"]
-                    else:
-                        new_id = create_new_conversation("New Chat", selected_model, user_id=curr_uname)
-                        st.session_state["active_conv_id"] = new_id
-                        st.session_state["messages"] = []
-                        st.session_state["loaded_conv_id"] = new_id
-                    st.rerun()
-
-    st.divider()
 
     # Service Status Pills (Compact footer)
     st.markdown("##### 📡 System Status")
@@ -3013,6 +2953,236 @@ def render_lenovo_kb_explorer():
             st.info("Folder re-sync and resource uploads are restricted to Admin accounts. Files updated inside `Tips & Resources` are indexed automatically.")
 
 
+def render_settings_section():
+    """Admin-only System Settings, Model Inference, AI Memory Hub & Diagnostics."""
+    if current_user.get("role", "").lower() != "admin":
+        st.warning("⚠️ Access Restricted: Only Admin accounts can access Settings (Rule 1).")
+        st.stop()
+
+    st.markdown("### ⚙️ Settings — Workspace, Engines & Preferences")
+    st.caption("Configure local model inference parameters, system instructions, AI tool memories, and engine health.")
+
+    req_tab = st.query_params.get("tab")
+    tab_titles = [
+        "🤖 Model & Inference",
+        "🧠 AI Memory Hub",
+        "⚡ Engines & Diagnostics"
+    ]
+    if req_tab:
+        matched = [t for t in tab_titles if req_tab.lower() in t.lower()]
+        if matched:
+            other = [t for t in tab_titles if t != matched[0]]
+            tab_titles = [matched[0]] + other
+
+    tabs = st.tabs(tab_titles)
+    for title, t_obj in zip(tab_titles, tabs):
+        if "Model" in title:
+            tab_inf = t_obj
+        elif "Memory" in title:
+            tab_mem = t_obj
+        elif "Diagnostics" in title:
+            tab_diag = t_obj
+
+    with tab_inf:
+        st.markdown("#### 🤖 Model Inference Parameters")
+        st.caption("Configure the active local model, inference temperature, context capacity, and core instructions.")
+
+        # Hardware-Aware LLM Suggestions
+        with st.expander("💡 Hardware-Tuned Model Advisor (Suggested Models for Your PC)", expanded=False):
+            render_model_recommendations_section(models_list, key_prefix="inf", compact=True)
+
+        col_inf_left, col_inf_right = st.columns([1.5, 1])
+
+        with col_inf_left:
+            def on_settings_model_change():
+                new_m = st.session_state.get("settings_model_select")
+                if new_m:
+                    set_preference("selected_model", new_m)
+                    st.session_state["selected_model_val"] = new_m
+                    st.session_state["chat_model_selector"] = new_m
+
+            s_idx = model_names.index(selected_model) if selected_model in model_names else 0
+            cur_sel_model = st.selectbox(
+                "Active Model",
+                options=model_names,
+                index=s_idx,
+                key="settings_model_select",
+                on_change=on_settings_model_change,
+                help="Select any local model running on your Ollama server. Persists across sessions."
+            )
+
+            # Model Specification Pill & Hardware Fit Card
+            specs_info = {
+                "llama3.2:latest": ("3.2B Parameters", "2.0 GB", "100% GPU VRAM Fit", "Fastest reasoning, lightweight & responsive"),
+                "gemma4:12b": ("11.9B Parameters", "7.4 GB", "100% GPU VRAM Fit", "Excellent multi-step reasoning, coding, and instruction following"),
+                "gpt-oss:latest": ("20.9B Parameters", "13.8 GB", "Safe Attention Active", "Deep architectural reasoning, complex multi-turn logic")
+            }
+            spec = specs_info.get(cur_sel_model, ("Local LLM", "Ollama Managed", "CUDA Accelerated", "Local offline model"))
+
+            st.markdown(f"""
+            <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 0.75rem; padding: 0.85rem 1rem; margin: 0.4rem 0 1rem 0;">
+                <div style="display: flex; gap: 0.45rem; flex-wrap: wrap; margin-bottom: 0.4rem;">
+                    <span class="brand-pill pill-indigo">{spec[0]}</span>
+                    <span class="brand-pill pill-success">{spec[1]}</span>
+                    <span class="brand-pill pill-indigo">{spec[2]}</span>
+                </div>
+                <div style="font-size: 0.82rem; color: #475569;">{spec[3]}</div>
+            </div>
+            """, unsafe_allow_html=True)
+
+            def on_settings_temp_change():
+                new_t = st.session_state.get("settings_temp_slider", 0.7)
+                set_preference("temperature", str(new_t))
+                st.session_state["temperature_val"] = new_t
+
+            st.slider(
+                "Temperature",
+                min_value=0.0,
+                max_value=1.0,
+                value=min(max(temperature, 0.0), 1.0),
+                step=0.05,
+                key="settings_temp_slider",
+                on_change=on_settings_temp_change,
+                help="Higher values make output more random/creative; lower values make it more focused and deterministic."
+            )
+            st.caption(
+                "🎯 **0.0 - 0.2**: Code generation & math • "
+                "⚖️ **0.3 - 0.7**: Balanced analysis • "
+                "🎨 **0.8 - 1.0**: Creative brainstorming"
+            )
+
+            def on_settings_ctx_change():
+                new_c = st.session_state.get("settings_ctx_select", 8192)
+                set_preference("context_tokens", str(new_c))
+                st.session_state["context_tokens_val"] = new_c
+
+            ctx_options = [2048, 4096, 8192, 16384, 32768]
+            ctx_idx = ctx_options.index(context_tokens) if context_tokens in ctx_options else 2
+            st.selectbox(
+                "Context Length",
+                options=ctx_options,
+                index=ctx_idx,
+                key="settings_ctx_select",
+                on_change=on_settings_ctx_change,
+                help="Context window token capacity allocated for prompt, memories, and document context."
+            )
+
+            def on_settings_web_search_change():
+                new_s = st.session_state.get("settings_web_search_toggle", True)
+                set_preference("enable_web_search", "true" if new_s else "false")
+                st.session_state["enable_web_search_val"] = new_s
+
+            st.checkbox(
+                "🌐 Live Web Search & Citations",
+                value=st.session_state.get("enable_web_search_val", True),
+                key="settings_web_search_toggle",
+                on_change=on_settings_web_search_change,
+                help="Retrieves real-time facts, news, and Wikipedia data alongside local LLM inferences."
+            )
+
+        with col_inf_right:
+            st.markdown("##### 🛡️ Hardware & Acceleration")
+            sys_info = get_cached_system_info()
+            accel = sys_info.get("accelerator", {})
+            cpu = sys_info.get("cpu", {})
+            mem = sys_info.get("memory", {})
+            os_name = sys_info.get("os_friendly", "Unknown OS")
+            arch = sys_info.get("architecture", "")
+
+            accel_name = accel.get("name", "Local Compute Engine")
+            accel_details = accel.get("details", "Hardware acceleration active.")
+
+            adapters = sys_info.get("detected_adapters", [])
+            other_adapters = [a for a in adapters if a.lower() not in accel_name.lower() and a.lower() not in accel_details.lower()]
+            other_adapters_html = ""
+            if other_adapters:
+                other_adapters_html = f'<div style="font-size: 0.82rem; color: #475569; margin-bottom: 0.45rem;"><b>Other Adapters:</b> {", ".join(other_adapters)}</div>'
+
+            lb_prof = get_cached_load_profile()
+            card_html = (
+                f'<div style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 0.75rem; padding: 1.1rem; box-shadow: 0 1px 3px rgba(0,0,0,0.03);">'
+                f'<div style="font-weight: 700; font-size: 0.95rem; color: #0f172a; margin-bottom: 0.75rem; display: flex; align-items: center; justify-content: space-between;">'
+                f'<span>⚡ {accel_name}</span>'
+                f'<span class="brand-pill pill-primary" style="font-size: 0.72rem; padding: 2px 8px;">{arch}</span>'
+                f'</div>'
+                f'<div style="font-size: 0.82rem; color: #334155; margin-bottom: 0.45rem;"><b>Platform:</b> {os_name}</div>'
+                f'<div style="font-size: 0.82rem; color: #334155; margin-bottom: 0.45rem;"><b>Compute Device:</b> {accel_details}</div>'
+                f'{other_adapters_html}'
+                f'<div style="font-size: 0.82rem; color: #334155; margin-bottom: 0.45rem;"><b>Host RAM:</b> {mem.get("total_gb", 0)} GB Total ({mem.get("available_gb", 0)} GB Available)</div>'
+                f'<div style="font-size: 0.82rem; color: #334155; margin-bottom: 0.45rem;"><b>Engine Host:</b> <code>http://127.0.0.1:11434</code></div>'
+                f'<div style="font-size: 0.82rem; color: #0284c7; margin-bottom: 0.45rem;"><b>Load Balancer:</b> <span class="brand-pill pill-primary" style="font-size: 0.72rem; padding: 2px 7px;">{lb_prof["badge"]} Active</span> <span style="color: #64748b; font-size: 0.78rem;">({lb_prof["optimal_threads"]} Cores, Batch {lb_prof["prompt_batch_size"]})</span></div>'
+                f'<div style="font-size: 0.82rem; color: #059669; margin-bottom: 0.45rem;"><b>Safe Flash Attention:</b> <span class="brand-pill pill-success">Active & Protected</span></div>'
+                f'<div style="font-size: 0.78rem; color: #64748b; line-height: 1.45; margin-top: 0.6rem; padding-top: 0.5rem; border-top: 1px solid #f1f5f9;"><code>OLLAMA_FLASH_ATTENTION=false</code> prevents hybrid VRAM/RAM split buffer overruns across Windows, macOS, and Linux.</div>'
+                f'</div>'
+            )
+            st.markdown(card_html, unsafe_allow_html=True)
+
+        st.markdown("---")
+        st.markdown("##### 📜 Core System Instruction")
+        st.caption("Custom instruction prepended to all inference prompts. Saved permanently across sessions.")
+
+        def on_settings_sys_inst_change():
+            new_si = st.session_state.get("settings_sys_inst_input", "").strip()
+            if new_si:
+                set_preference("system_instruction", new_si)
+                st.session_state["sys_inst_val"] = new_si
+
+        sys_inst_text = st.text_area(
+            "System Instruction",
+            value=system_instruction,
+            key="settings_sys_inst_input",
+            height=140,
+            on_change=on_settings_sys_inst_change,
+            help="Custom system instruction. Automatically saved to database and remembered across sessions."
+        )
+
+        col_save, col_reset, col_sp = st.columns([1.2, 1.2, 3])
+        with col_save:
+            if st.button("💾 Save Instruction", use_container_width=True, type="primary"):
+                curr_val = st.session_state.get("settings_sys_inst_input", sys_inst_text).strip()
+                set_preference("system_instruction", curr_val)
+                st.session_state["sys_inst_val"] = curr_val
+                st.toast("System instruction permanently saved!", icon="💾")
+        with col_reset:
+            if st.button("↺ Reset to Default", use_container_width=True):
+                set_preference("system_instruction", DEFAULT_SYSTEM_INSTRUCTION)
+                st.session_state["sys_inst_val"] = DEFAULT_SYSTEM_INSTRUCTION
+                st.session_state["settings_sys_inst_input"] = DEFAULT_SYSTEM_INSTRUCTION
+                st.toast("Reset to default system instruction!", icon="↺")
+                st.rerun()
+
+    with tab_mem:
+        render_memory_hub_section()
+
+    with tab_diag:
+        render_diagnostics_section()
+
+    st.markdown("---")
+    with st.expander("ℹ️ Account Management Rules & Governance", expanded=False):
+        rules = account_service.get_governance_rules()
+        if rules:
+            for r in rules:
+                if "Rule for" in r:
+                    st.markdown(f"**{r}**")
+                else:
+                    st.markdown(f"- {r}")
+        else:
+            st.markdown("""
+            - 1. Only Admin can add or remove user
+            - 2. Every user should have separate workspace (`workspace/<username>`)
+            - 3. Multiple users can log in and use application concurrently
+            - 4. Use a load balancer to smooth operation
+            - 5. Use `Account Management.xlsx` as the sole database
+            """)
+
+        st.divider()
+        st.markdown("**Registered User Accounts:**")
+        users_list = account_service.get_all_users()
+        for u in users_list:
+            role_icon = "👑" if u.get("role", "").lower() == "admin" else "👤"
+            st.markdown(f"- {role_icon} **{u['name']}** (`@{u['username']}`) — *{u['role']}*")
+
+
 def render_account_management_section():
     """
     Dedicated Account Management, Usage Audit & Multi-User Load Balancer Studio.
@@ -3041,12 +3211,25 @@ def render_account_management_section():
 
     st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
 
-    tab_users, tab_audit, tab_lb, tab_rules = st.tabs([
+    admin_tab_titles = [
         "👥 User Accounts (Excel DB)",
         "📊 Usage Audit & Analytics",
+        "⚙️ Settings",
         "⚡ Multi-User Load Balancer",
         "📜 System Rules & Governance"
-    ])
+    ]
+    req_admin_page = (st.query_params.get("page") or "").lower()
+    req_admin_tab = (st.query_params.get("tab") or "").lower()
+    if req_admin_page in ["settings", "more"] or any(k in req_admin_tab for k in ["setting", "model", "memory", "diagnostic"]):
+        admin_tab_titles = ["⚙️ Settings"] + [t for t in admin_tab_titles if t != "⚙️ Settings"]
+
+    admin_tabs = st.tabs(admin_tab_titles)
+    tab_map = dict(zip(admin_tab_titles, admin_tabs))
+    tab_users = tab_map["👥 User Accounts (Excel DB)"]
+    tab_audit = tab_map["📊 Usage Audit & Analytics"]
+    tab_settings = tab_map["⚙️ Settings"]
+    tab_lb = tab_map["⚡ Multi-User Load Balancer"]
+    tab_rules = tab_map["📜 System Rules & Governance"]
 
     with tab_users:
         st.markdown("#### 📋 Registered User Accounts")
@@ -3065,7 +3248,7 @@ def render_account_management_section():
             })
         st.dataframe(user_rows, use_container_width=True)
 
-        col_add, col_del = st.columns(2)
+        col_add, col_pwd, col_del = st.columns(3)
         with col_add:
             with st.expander("➕ Add New User (Admin Only)", expanded=False):
                 with st.form("add_user_form", clear_on_submit=True):
@@ -3099,6 +3282,44 @@ def render_account_management_section():
                             except Exception as ex:
                                 st.error(f"Error adding user: {ex}")
 
+        with col_pwd:
+            with st.expander("🔑 Change / Reset Password (Admin Only)", expanded=False):
+                with st.form("update_password_form", clear_on_submit=True):
+                    all_usernames = [u["username"] for u in users]
+                    target_pwd_user = st.selectbox(
+                        "Select User Account",
+                        options=all_usernames,
+                        format_func=lambda x: f"@{x}",
+                        key="upd_pwd_target_user",
+                    )
+                    upd_pass_1 = st.text_input("New Password", type="password", placeholder="Minimum 3 characters", key="upd_pwd_new")
+                    upd_pass_2 = st.text_input("Confirm New Password", type="password", placeholder="Re-enter new password", key="upd_pwd_confirm")
+                    submit_pwd = st.form_submit_button("Update Password in Excel DB", type="primary")
+
+                    if submit_pwd:
+                        if not upd_pass_1 or len(upd_pass_1.strip()) < 3:
+                            st.error("New password must be at least 3 characters long.")
+                        elif upd_pass_1.strip() != upd_pass_2.strip():
+                            st.error("Passwords do not match. Please confirm carefully.")
+                        else:
+                            try:
+                                upd_res = account_service.update_password(
+                                    username=target_pwd_user,
+                                    new_password=upd_pass_1,
+                                    actor_role=current_user.get("role", "User"),
+                                )
+                                audit_service.record_event(
+                                    username=curr_uname or "admin",
+                                    user_role=user_role,
+                                    event_type="admin_password_update",
+                                    details=f"Updated password for @{upd_res['username']}",
+                                )
+                                st.success(f"Password updated for @{upd_res['username']} in Account Management.xlsx!")
+                                time.sleep(0.5)
+                                st.rerun()
+                            except Exception as ex:
+                                st.error(f"Error updating password: {ex}")
+
         with col_del:
             with st.expander("🗑️ Remove User (Admin Only)", expanded=False):
                 removable_users = [u["username"] for u in users if u["username"].lower() != current_user.get("username", "").lower()]
@@ -3126,6 +3347,9 @@ def render_account_management_section():
 
     with tab_audit:
         render_admin_audit_dashboard(key_prefix="acct_audit", show_title=False)
+
+    with tab_settings:
+        render_settings_section()
 
     with tab_lb:
         st.markdown("#### ⚡ Real-Time Multi-User Load Balancer")
@@ -3197,22 +3421,56 @@ if selected_page in ["💬 Chat", "💬 All-in-One Studio", "Chat", "All-in-One 
     active_conv_meta = next((c for c in all_conversations if c["id"] == st.session_state["active_conv_id"]), None)
     active_title = active_conv_meta["title"] if active_conv_meta else "New Chat"
 
-    chat_header_c1, chat_header_c2 = st.columns([5.0, 1.0])
+    chat_header_c1, chat_header_c_hist = st.columns([4.8, 1.5])
     with chat_header_c1:
         st.markdown(f"### 💬 {active_title}")
         st.caption(f"Session `{st.session_state['active_conv_id'][:8]}` • {len(st.session_state.messages)} msgs • Active: `{selected_model}`")
-    with chat_header_c2:
-        with st.popover("⚙️ Options"):
-            new_title = st.text_input("Rename Chat", value=active_title, key="rename_chat_input")
-            if st.button("Save Title", use_container_width=True):
-                if new_title.strip():
-                    update_conversation_title(st.session_state["active_conv_id"], new_title.strip())
-                    st.rerun()
-            if st.button("🗑️ Clear Messages", use_container_width=True):
-                db._execute_sync("DELETE FROM messages WHERE conversation_id = ?", (st.session_state["active_conv_id"],))
-                get_conversations.clear()
-                st.session_state["messages"] = []
-                st.rerun()
+    with chat_header_c_hist:
+        with st.popover(f"🕒 Recent Chats ({len(all_conversations)})", use_container_width=True):
+            hist_filter = st.text_input(
+                "Filter chats",
+                placeholder="🔍 Filter chat history...",
+                key="header_chat_history_filter",
+                label_visibility="collapsed",
+            ).strip().lower()
+            filtered_convs = [
+                c for c in all_conversations
+                if not hist_filter or hist_filter in (c.get("title") or "New Chat").lower()
+            ]
+            with st.container(height=250):
+                if not filtered_convs:
+                    st.caption("No matching chats found.")
+                for conv in filtered_convs:
+                    is_active = (conv["id"] == st.session_state["active_conv_id"])
+                    col_c1, col_c2 = st.columns([5, 1])
+                    with col_c1:
+                        raw_t = conv.get("title") or "New Chat"
+                        display_t = raw_t if len(raw_t) <= 24 else raw_t[:22] + "..."
+                        label = f"▸ {display_t}" if is_active else f"  {display_t}"
+                        if st.button(
+                            label,
+                            key=f"ch_{conv['id']}",
+                            use_container_width=True,
+                            help=f"{raw_t}\nModel: {conv.get('model', 'gemma4:12b')} • Messages: {conv.get('msg_count', 0)}"
+                        ):
+                            st.session_state["active_conv_id"] = conv["id"]
+                            st.session_state["messages"] = load_conversation_messages(conv["id"], user_id=curr_uname)
+                            st.session_state["loaded_conv_id"] = conv["id"]
+                            st.rerun()
+                    with col_c2:
+                        if st.button("✕", key=f"del_{conv['id']}", help="Delete chat", use_container_width=True):
+                            delete_conversation(conv["id"], user_id=curr_uname)
+                            rem = [c for c in all_conversations if c["id"] != conv["id"]]
+                            if rem:
+                                st.session_state["active_conv_id"] = rem[0]["id"]
+                                st.session_state["messages"] = load_conversation_messages(rem[0]["id"], user_id=curr_uname)
+                                st.session_state["loaded_conv_id"] = rem[0]["id"]
+                            else:
+                                new_id = create_new_conversation("New Chat", selected_model, user_id=curr_uname)
+                                st.session_state["active_conv_id"] = new_id
+                                st.session_state["messages"] = []
+                                st.session_state["loaded_conv_id"] = new_id
+                            st.rerun()
 
     # Display empty state starter cards if no messages
     if not st.session_state.messages:
@@ -4009,209 +4267,16 @@ elif selected_page == "📊 Audit & Analytics":
 # TAB: SETTINGS & WORKSPACE CONFIGURATION
 # =========================================================
 elif selected_page in ["⚙️ Settings", "Settings", "⚙️ More", "More"]:
-    st.markdown("### ⚙️ Settings — Workspace, Engines & Preferences")
-    st.caption("Configure local model inference parameters, system instructions, AI tool memories, and engine health.")
-
-    req_tab = st.query_params.get("tab")
-    tab_titles = [
-        "🤖 Model & Inference",
-        "🧠 AI Memory Hub",
-        "⚡ Engines & Diagnostics"
-    ]
-    if req_tab:
-        matched = [t for t in tab_titles if req_tab.lower() in t.lower()]
-        if matched:
-            other = [t for t in tab_titles if t != matched[0]]
-            tab_titles = [matched[0]] + other
-
-    tabs = st.tabs(tab_titles)
-    for title, t_obj in zip(tab_titles, tabs):
-        if "Model" in title:
-            tab_inf = t_obj
-        elif "Memory" in title:
-            tab_mem = t_obj
-        elif "Diagnostics" in title:
-            tab_diag = t_obj
-
-    with tab_inf:
-        st.markdown("#### 🤖 Model Inference Parameters")
-        st.caption("Configure the active local model, inference temperature, context capacity, and core instructions.")
-
-        # Hardware-Aware LLM Suggestions
-        with st.expander("💡 Hardware-Tuned Model Advisor (Suggested Models for Your PC)", expanded=False):
-            render_model_recommendations_section(models_list, key_prefix="inf", compact=True)
-
-        col_inf_left, col_inf_right = st.columns([1.5, 1])
-
-        with col_inf_left:
-            def on_settings_model_change():
-                new_m = st.session_state.get("settings_model_select")
-                if new_m:
-                    set_preference("selected_model", new_m)
-                    st.session_state["selected_model_val"] = new_m
-                    st.session_state["chat_model_selector"] = new_m
-
-            s_idx = model_names.index(selected_model) if selected_model in model_names else 0
-            cur_sel_model = st.selectbox(
-                "Active Model",
-                options=model_names,
-                index=s_idx,
-                key="settings_model_select",
-                on_change=on_settings_model_change,
-                help="Select any local model running on your Ollama server. Persists across sessions."
-            )
-
-            # Model Specification Pill & Hardware Fit Card
-            specs_info = {
-                "llama3.2:latest": ("3.2B Parameters", "2.0 GB", "100% GPU VRAM Fit", "Fastest reasoning, lightweight & responsive"),
-                "gemma4:12b": ("11.9B Parameters", "7.4 GB", "100% GPU VRAM Fit", "Excellent multi-step reasoning, coding, and instruction following"),
-                "gpt-oss:latest": ("20.9B Parameters", "13.8 GB", "Safe Attention Active", "Deep architectural reasoning, complex multi-turn logic")
-            }
-            spec = specs_info.get(cur_sel_model, ("Local LLM", "Ollama Managed", "CUDA Accelerated", "Local offline model"))
-
-            st.markdown(f"""
-            <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 0.75rem; padding: 0.85rem 1rem; margin: 0.4rem 0 1rem 0;">
-                <div style="display: flex; gap: 0.45rem; flex-wrap: wrap; margin-bottom: 0.4rem;">
-                    <span class="brand-pill pill-indigo">{spec[0]}</span>
-                    <span class="brand-pill pill-success">{spec[1]}</span>
-                    <span class="brand-pill pill-indigo">{spec[2]}</span>
-                </div>
-                <div style="font-size: 0.82rem; color: #475569;">{spec[3]}</div>
-            </div>
-            """, unsafe_allow_html=True)
-
-            def on_settings_temp_change():
-                new_t = st.session_state.get("settings_temp_slider", 0.7)
-                set_preference("temperature", str(new_t))
-                st.session_state["temperature_val"] = new_t
-
-            st.slider(
-                "Temperature",
-                min_value=0.0,
-                max_value=1.0,
-                value=min(max(temperature, 0.0), 1.0),
-                step=0.05,
-                key="settings_temp_slider",
-                on_change=on_settings_temp_change,
-                help="Higher values make output more random/creative; lower values make it more focused and deterministic."
-            )
-            st.caption(
-                "🎯 **0.0 - 0.2**: Code generation & math • "
-                "⚖️ **0.3 - 0.7**: Balanced analysis • "
-                "🎨 **0.8 - 1.0**: Creative brainstorming"
-            )
-
-            def on_settings_ctx_change():
-                new_c = st.session_state.get("settings_ctx_select", 8192)
-                set_preference("context_tokens", str(new_c))
-                st.session_state["context_tokens_val"] = new_c
-
-            ctx_options = [2048, 4096, 8192, 16384, 32768]
-            ctx_idx = ctx_options.index(context_tokens) if context_tokens in ctx_options else 2
-            st.selectbox(
-                "Context Length",
-                options=ctx_options,
-                index=ctx_idx,
-                key="settings_ctx_select",
-                on_change=on_settings_ctx_change,
-                help="Context window token capacity allocated for prompt, memories, and document context."
-            )
-
-            def on_settings_web_search_change():
-                new_s = st.session_state.get("settings_web_search_toggle", True)
-                set_preference("enable_web_search", "true" if new_s else "false")
-                st.session_state["enable_web_search_val"] = new_s
-
-            st.checkbox(
-                "🌐 Live Web Search & Citations",
-                value=st.session_state.get("enable_web_search_val", True),
-                key="settings_web_search_toggle",
-                on_change=on_settings_web_search_change,
-                help="Retrieves real-time facts, news, and Wikipedia data alongside local LLM inferences."
-            )
-
-        with col_inf_right:
-            st.markdown("##### 🛡️ Hardware & Acceleration")
-            sys_info = get_cached_system_info()
-            accel = sys_info.get("accelerator", {})
-            cpu = sys_info.get("cpu", {})
-            mem = sys_info.get("memory", {})
-            os_name = sys_info.get("os_friendly", "Unknown OS")
-            arch = sys_info.get("architecture", "")
-
-            accel_name = accel.get("name", "Local Compute Engine")
-            accel_details = accel.get("details", "Hardware acceleration active.")
-
-            adapters = sys_info.get("detected_adapters", [])
-            other_adapters = [a for a in adapters if a.lower() not in accel_name.lower() and a.lower() not in accel_details.lower()]
-            other_adapters_html = ""
-            if other_adapters:
-                other_adapters_html = f'<div style="font-size: 0.82rem; color: #475569; margin-bottom: 0.45rem;"><b>Other Adapters:</b> {", ".join(other_adapters)}</div>'
-
-            lb_prof = get_cached_load_profile()
-            card_html = (
-                f'<div style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 0.75rem; padding: 1.1rem; box-shadow: 0 1px 3px rgba(0,0,0,0.03);">'
-                f'<div style="font-weight: 700; font-size: 0.95rem; color: #0f172a; margin-bottom: 0.75rem; display: flex; align-items: center; justify-content: space-between;">'
-                f'<span>⚡ {accel_name}</span>'
-                f'<span class="brand-pill pill-primary" style="font-size: 0.72rem; padding: 2px 8px;">{arch}</span>'
-                f'</div>'
-                f'<div style="font-size: 0.82rem; color: #334155; margin-bottom: 0.45rem;"><b>Platform:</b> {os_name}</div>'
-                f'<div style="font-size: 0.82rem; color: #334155; margin-bottom: 0.45rem;"><b>Compute Device:</b> {accel_details}</div>'
-                f'{other_adapters_html}'
-                f'<div style="font-size: 0.82rem; color: #334155; margin-bottom: 0.45rem;"><b>Host RAM:</b> {mem.get("total_gb", 0)} GB Total ({mem.get("available_gb", 0)} GB Available)</div>'
-                f'<div style="font-size: 0.82rem; color: #334155; margin-bottom: 0.45rem;"><b>Engine Host:</b> <code>http://127.0.0.1:11434</code></div>'
-                f'<div style="font-size: 0.82rem; color: #0284c7; margin-bottom: 0.45rem;"><b>Load Balancer:</b> <span class="brand-pill pill-primary" style="font-size: 0.72rem; padding: 2px 7px;">{lb_prof["badge"]} Active</span> <span style="color: #64748b; font-size: 0.78rem;">({lb_prof["optimal_threads"]} Cores, Batch {lb_prof["prompt_batch_size"]})</span></div>'
-                f'<div style="font-size: 0.82rem; color: #059669; margin-bottom: 0.45rem;"><b>Safe Flash Attention:</b> <span class="brand-pill pill-success">Active & Protected</span></div>'
-                f'<div style="font-size: 0.78rem; color: #64748b; line-height: 1.45; margin-top: 0.6rem; padding-top: 0.5rem; border-top: 1px solid #f1f5f9;"><code>OLLAMA_FLASH_ATTENTION=false</code> prevents hybrid VRAM/RAM split buffer overruns across Windows, macOS, and Linux.</div>'
-                f'</div>'
-            )
-            st.markdown(card_html, unsafe_allow_html=True)
-
-        st.markdown("---")
-        st.markdown("##### 📜 Core System Instruction")
-        st.caption("Custom instruction prepended to all inference prompts. Saved permanently across sessions.")
-
-        def on_settings_sys_inst_change():
-            new_si = st.session_state.get("settings_sys_inst_input", "").strip()
-            if new_si:
-                set_preference("system_instruction", new_si)
-                st.session_state["sys_inst_val"] = new_si
-
-        sys_inst_text = st.text_area(
-            "System Instruction",
-            value=system_instruction,
-            key="settings_sys_inst_input",
-            height=140,
-            on_change=on_settings_sys_inst_change,
-            help="Custom system instruction. Automatically saved to database and remembered across sessions."
-        )
-
-        col_save, col_reset, col_sp = st.columns([1.2, 1.2, 3])
-        with col_save:
-            if st.button("💾 Save Instruction", use_container_width=True, type="primary"):
-                curr_val = st.session_state.get("settings_sys_inst_input", sys_inst_text).strip()
-                set_preference("system_instruction", curr_val)
-                st.session_state["sys_inst_val"] = curr_val
-                st.toast("System instruction permanently saved!", icon="💾")
-        with col_reset:
-            if st.button("↺ Reset to Default", use_container_width=True):
-                set_preference("system_instruction", DEFAULT_SYSTEM_INSTRUCTION)
-                st.session_state["sys_inst_val"] = DEFAULT_SYSTEM_INSTRUCTION
-                st.session_state["settings_sys_inst_input"] = DEFAULT_SYSTEM_INSTRUCTION
-                st.toast("Reset to default system instruction!", icon="↺")
-                st.rerun()
-
-    with tab_mem:
-        render_memory_hub_section()
-
-    with tab_diag:
-        render_diagnostics_section()
+    render_settings_section()
 
 
 # =========================================================
 # TAB 2: AI TOOL MEMORY HUB (DIRECT VIEW FOR DEV MODE)
 # =========================================================
 elif selected_page == "🧠 AI Tool Memory Hub":
+    if not is_admin:
+        st.warning("⚠️ Access Restricted: Only Admin accounts can access System Settings.")
+        st.stop()
     render_memory_hub_section()
 
 
@@ -4399,4 +4464,7 @@ elif selected_page == "👁️ Vision Multimodal":
 # TAB 7: DIAGNOSTICS & MODELS (DIRECT VIEW FOR DEV MODE)
 # =========================================================
 elif selected_page == "⚙️ Diagnostics & Models":
+    if not is_admin:
+        st.warning("⚠️ Access Restricted: Only Admin accounts can access System Settings.")
+        st.stop()
     render_diagnostics_section()

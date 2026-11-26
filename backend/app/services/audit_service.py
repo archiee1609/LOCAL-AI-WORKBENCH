@@ -17,7 +17,7 @@ from app.database.connection import db
 
 ACTION_EVENT_TYPES = {"chat", "report", "code", "search", "vision", "pull", "tips"}
 AUTH_EVENT_TYPES = {"login", "logout"}
-ADMIN_EVENT_TYPES = {"admin_user_add", "admin_user_remove"}
+ADMIN_EVENT_TYPES = {"admin_user_add", "admin_user_remove", "admin_password_update"}
 
 FEATURE_LABELS = {
     "chat": "💬 Chat",
@@ -31,6 +31,7 @@ FEATURE_LABELS = {
     "logout": "🚪 Sign Out",
     "admin_user_add": "➕ Admin Added User",
     "admin_user_remove": "🗑️ Admin Removed User",
+    "admin_password_update": "🔑 Admin Updated Password",
 }
 
 _ENSURE_TABLE_SQL = """

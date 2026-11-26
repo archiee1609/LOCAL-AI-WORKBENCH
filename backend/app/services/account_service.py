@@ -290,6 +290,54 @@ class AccountService:
             logger.info(f"[AccountService] Admin removed user '{clean_uname}' from row {target_row}")
             return True
 
+    def update_password(
+        self,
+        username: str,
+        new_password: str,
+        actor_role: str = "Admin",
+    ) -> Dict[str, Any]:
+        """
+        Rule 1: Only Admin can update/reset user passwords.
+        Rule 5: Persists updated password strictly in Account Management.xlsx.
+        """
+        if actor_role.strip().lower() != "admin":
+            raise PermissionError("Access Denied: Only Admin can update user passwords (Rule 1).")
+
+        clean_uname = (username or "").strip().lower()
+        clean_pass = (new_password or "").strip()
+
+        if not clean_uname:
+            raise ValueError("Username is required.")
+        if len(clean_pass) < 3:
+            raise ValueError("New password must be at least 3 characters long.")
+
+        with self._lock:
+            wb = openpyxl.load_workbook(str(self.excel_path))
+            ws = wb.active
+
+            target_row = None
+            for r in range(2, ws.max_row + 1):
+                uname_val = ws.cell(row=r, column=2).value
+                if uname_val and str(uname_val).strip().lower() == clean_uname:
+                    target_row = r
+                    break
+
+            if not target_row:
+                raise ValueError(f"User '{username}' does not exist.")
+
+            ws.cell(row=target_row, column=3, value=clean_pass)
+            wb.save(str(self.excel_path))
+            user_name = str(ws.cell(row=target_row, column=1).value or clean_uname).strip()
+            user_role_val = str(ws.cell(row=target_row, column=4).value or "User").strip()
+            logger.info(f"[AccountService] Admin updated password for user '{clean_uname}' at row {target_row}")
+
+        return {
+            "username": clean_uname,
+            "name": user_name,
+            "role": user_role_val,
+            "updated": True,
+        }
+
     def get_governance_rules(self) -> List[str]:
         """Reads governance rules documented in Column F of Account Management.xlsx."""
         with self._lock:

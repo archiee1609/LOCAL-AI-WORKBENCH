@@ -15,6 +15,8 @@ from app.schemas.account import (
     UserResponse,
     UserCreateRequest,
     UserDeleteResponse,
+    UserPasswordUpdateRequest,
+    UserPasswordUpdateResponse,
     LoadBalancerStats
 )
 from app.services.account_service import account_service
@@ -145,6 +147,45 @@ async def delete_user_endpoint(
             success=True,
             message=f"User '{username}' was successfully removed from Account Management.xlsx.",
             deleted_username=username
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except PermissionError as e:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+
+
+@router.patch("/accounts/users/{username}/password", response_model=UserPasswordUpdateResponse)
+async def update_user_password_endpoint(
+    username: str,
+    payload: UserPasswordUpdateRequest,
+    actor_role: str = Query(default="Admin", description="Role of the operating user (Rule 1: Admin only)"),
+    actor_username: str = Query(default="admin", description="Username of operating Admin"),
+):
+    """
+    Updates/resets a user's password inside Account Management.xlsx.
+    Rule 1: Only Admin can update user passwords.
+    """
+    if actor_role.strip().lower() != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access Denied: Only Admin can update user passwords (Account Management Rule 1).",
+        )
+    try:
+        updated = account_service.update_password(
+            username=username,
+            new_password=payload.new_password,
+            actor_role=actor_role,
+        )
+        audit_service.record_event(
+            username=actor_username,
+            user_role=actor_role,
+            event_type="admin_password_update",
+            details=f"Updated password for @{updated['username']}",
+        )
+        return UserPasswordUpdateResponse(
+            success=True,
+            message=f"Password for '@{updated['username']}' updated successfully in Account Management.xlsx.",
+            username=updated["username"],
         )
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))

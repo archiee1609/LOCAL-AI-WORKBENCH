@@ -22,6 +22,14 @@ class UserDeleteResponse(BaseModel):
     message: str
     deleted_username: str
 
+class UserPasswordUpdateRequest(BaseModel):
+    new_password: str = Field(..., min_length=3, description="New password for the user")
+
+class UserPasswordUpdateResponse(BaseModel):
+    success: bool
+    message: str
+    username: str
+
 class LoadBalancerStats(BaseModel):
     active_requests: int
     queued_requests: int
