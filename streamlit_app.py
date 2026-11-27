@@ -76,6 +76,12 @@ from app.services.model_recommendation_service import model_recommendation_servi
 from app.services.account_service import account_service
 from app.services.audit_service import audit_service, estimate_tokens
 from app.services.lenovo_kb_service import lenovo_kb_service
+from app.services.psref_service import (
+    psref_service,
+    detect_psref_intent,
+    format_psref_markdown,
+    format_psref_llm_context,
+)
 from app.core.load_balancer import load_balancer
 
 @st.cache_data(ttl=30)
@@ -4001,7 +4007,7 @@ if selected_page in ["💬 Chat", "💬 All-in-One Studio", "Chat", "All-in-One 
     # Chat Input Box (Native paperclip support for uploading up to 5 files)
     default_prompt = st.session_state.pop("prompt_input", "")
     chat_submission = st.chat_input(
-        "Ask anything, query Lenovo models/issues (/tips), attach up to 5 files, or use /search, /report, /code, /pull...",
+        "Ask anything, enter an MTM (e.g. 83J2003NIN) for automatic PSREF specs, /tips, /search, /report, /code, /pull...",
         accept_file="multiple",
         key="main_chat_input"
     )
@@ -4098,7 +4104,7 @@ if selected_page in ["💬 Chat", "💬 All-in-One Studio", "Chat", "All-in-One 
             if prompt_to_use.strip().startswith("/image"):
                 pass
 
-            elif is_rep and not prompt_to_use.strip().lower().startswith(("/tips", "/kb", "!tips", "!kb")):
+            elif is_rep and not prompt_to_use.strip().lower().startswith(("/tips", "/kb", "!tips", "!kb", "/psref", "!psref")):
                 status_box = st.empty()
                 status_box.markdown(
                     render_thinking_badge("analysing", f"Evaluating technical architecture and diagnostics for '{report_title}'..."),
@@ -4336,6 +4342,37 @@ if selected_page in ["💬 Chat", "💬 All-in-One Studio", "Chat", "All-in-One 
                             details=str(e)[:180],
                         )
 
+            # Direct Lenovo PSREF Specification lookup (standalone MT/MTM or /psref command)
+            elif (psref_direct := detect_psref_intent(prompt_to_use)) and psref_direct.get("explicit"):
+                status_box = st.empty()
+                status_box.markdown(
+                    render_thinking_badge("analysing", f"Looking up Lenovo PSREF specifications for '{psref_direct['code']}' ..."),
+                    unsafe_allow_html=True,
+                )
+                if st.session_state.get("enable_web_search_val", True):
+                    psref_res = psref_service.lookup_sync(psref_direct["code"])
+                else:
+                    psref_res = psref_service.get_cached(psref_direct["code"]) or {
+                        "found": False,
+                        "requested_code": psref_direct["code"],
+                        "error": "Web Search is disabled in Settings and this code is not in local PSREF cache.",
+                    }
+                out_msg = format_psref_markdown(psref_res)
+                status_box.markdown(out_msg, unsafe_allow_html=True)
+                save_chat_message(st.session_state["active_conv_id"], "assistant", out_msg)
+                st.session_state.messages.append({"role": "assistant", "content": out_msg})
+                audit_service.record_event(
+                    username=curr_uname,
+                    user_role=user_role,
+                    event_type="psref",
+                    model_used="psref-live",
+                    conversation_id=st.session_state["active_conv_id"],
+                    tokens_est=estimate_tokens(prompt_to_use) + estimate_tokens(out_msg),
+                    duration_ms=int((time.perf_counter() - t_action_start) * 1000),
+                    status="success" if psref_res.get("found") else "error",
+                    details=f"PSREF {psref_direct.get('lookup_type', '').upper()}: {psref_direct['code']}",
+                )
+
             # Standard Chat Inference
             else:
                 # 1. Build context with Active Memories from ChatGPT, Claude, Cursor, etc.
@@ -4365,6 +4402,33 @@ if selected_page in ["💬 Chat", "💬 All-in-One Studio", "Chat", "All-in-One 
                 wants_video = bool(kb_intent.get("show_video"))
 
                 response_placeholder = st.empty()
+
+                # Automatic Lenovo PSREF lookup whenever user enters an MTM or asks MT specs
+                psref_intent = detect_psref_intent(clean_prompt)
+                psref_res: Optional[Dict[str, Any]] = None
+                psref_citations_md = ""
+                if psref_intent:
+                    response_placeholder.markdown(
+                        render_thinking_badge("analysing", f"Looking up Lenovo PSREF for '{psref_intent['code']}' ..."),
+                        unsafe_allow_html=True,
+                    )
+                    if st.session_state.get("enable_web_search_val", True):
+                        psref_res = psref_service.lookup_sync(psref_intent["code"])
+                    else:
+                        psref_res = psref_service.get_cached(psref_intent["code"])
+                    if psref_res and psref_res.get("found"):
+                        _psref_ctx = format_psref_llm_context(psref_res)
+                        if _psref_ctx:
+                            effective_system += f"\n\n---\n{_psref_ctx}"
+                        if psref_intent.get("wants_specs"):
+                            psref_citations_md = (
+                                f"\n\n---\n**📋 Official PSREF Source:** "
+                                f"[{psref_res.get('product_name', psref_intent['code'])} ({psref_res.get('model_code') or psref_res.get('machine_type')})]"
+                                f"({psref_res.get('psref_url', 'https://psref.lenovo.com/')})"
+                            )
+                        # Enrich KB/Video query with PSREF product name & Machine Type when MTM was supplied
+                        if (wants_tips or wants_video) and psref_res.get("machine_type"):
+                            kb_query_target = f"{kb_query_target} {psref_res.get('product_name', '')} {psref_res.get('machine_type', '')}".strip()
 
                 # Internal Lenovo Tips & Resources KB / Video lookup (strictly on user request)
                 if wants_tips or wants_video:
@@ -4444,6 +4508,7 @@ if selected_page in ["💬 Chat", "💬 All-in-One Studio", "Chat", "All-in-One 
                     not explicit_kb
                     and not wants_tips
                     and not wants_video
+                    and not (psref_res and psref_res.get("found"))
                     and st.session_state.get("enable_web_search_val", True)
                 ):
                     search_query_target = web_search_service.detect_search_intent(clean_prompt)
@@ -4609,6 +4674,9 @@ if selected_page in ["💬 Chat", "💬 All-in-One Studio", "Chat", "All-in-One 
                     if kb_citations_md and kb_citations_md not in full_response:
                         full_response += kb_citations_md
 
+                    if psref_citations_md and psref_citations_md not in full_response:
+                        full_response += psref_citations_md
+
                     if search_citations_md and search_citations_md not in full_response:
                         full_response += search_citations_md
 
@@ -4660,7 +4728,23 @@ if selected_page in ["💬 Chat", "💬 All-in-One Studio", "Chat", "All-in-One 
 
                 except Exception as e:
                     err_msg = str(e).strip()
-                    if (kb_matches or (kb_video_bundle and kb_video_bundle.get("videos"))) and (
+                    if psref_res and psref_res.get("found") and not (wants_tips or wants_video):
+                        fallback_md = format_psref_markdown(psref_res)
+                        fallback_md += f"\n\n> ℹ️ *Displayed verified Lenovo PSREF specifications directly (Local LLM unavailable: {err_msg[:120] or type(e).__name__}).*"
+                        response_placeholder.markdown(fallback_md, unsafe_allow_html=True)
+                        save_chat_message(st.session_state["active_conv_id"], "assistant", fallback_md)
+                        st.session_state.messages.append({"role": "assistant", "content": fallback_md})
+                        audit_service.record_event(
+                            username=curr_uname,
+                            user_role=user_role,
+                            event_type="psref",
+                            model_used="psref-live",
+                            conversation_id=st.session_state["active_conv_id"],
+                            tokens_est=estimate_tokens(prompt_to_use) + estimate_tokens(fallback_md),
+                            duration_ms=int((time.perf_counter() - t_action_start) * 1000),
+                            details=f"PSREF fallback ({psref_intent['code'] if psref_intent else ''})",
+                        )
+                    elif (kb_matches or (kb_video_bundle and kb_video_bundle.get("videos"))) and (
                         wants_tips or wants_video
                     ):
                         fallback_matches = kb_matches if wants_tips else []

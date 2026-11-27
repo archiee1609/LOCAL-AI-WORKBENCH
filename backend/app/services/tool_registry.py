@@ -16,6 +16,7 @@ from app.database.connection import db
 from app.schemas.tools import ToolDefinition, ToolExecutionResponse
 from app.services.web_search_service import web_search_service
 from app.services.lenovo_kb_service import lenovo_kb_service
+from app.services.psref_service import psref_service, format_psref_llm_context
 
 # Safe AST evaluator for math
 SAFE_OPERATORS = {
@@ -412,6 +413,29 @@ class ToolRegistry:
             self._handle_search_lenovo_kb,
         )
 
+        # 13. Lenovo PSREF Live Hardware Specification Lookup
+        self.register_tool(
+            ToolDefinition(
+                name="lookup_lenovo_psref",
+                description=(
+                    "Looks up official Lenovo PSREF hardware specifications from psref.lenovo.com "
+                    "by 4-character Machine Type (MT, e.g. '83J2'), 10-character MTM (e.g. '83J2003NIN'), "
+                    "or product name. Use when the user asks for device specifications or provides an MT/MTM."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "code": {"type": "string", "description": "Lenovo MT (e.g. 83J2), MTM (e.g. 83J2003NIN), or product name"},
+                        "force_refresh": {"type": "boolean", "description": "Set true to bypass local SQLite cache"},
+                    },
+                    "required": ["code"],
+                },
+                category="knowledge_base",
+                is_external=True,
+            ),
+            self._handle_lookup_lenovo_psref,
+        )
+
     # Handlers
     async def _handle_calculator(self, args: Dict[str, Any]) -> Dict[str, Any]:
         expr = args.get("expression", "")
@@ -554,6 +578,15 @@ class ToolRegistry:
             "total_matches": len(matches),
             "results": matches,
             "formatted_context": lenovo_kb_service.format_context_for_llm(query, matches, max_items=limit),
+        }
+
+    async def _handle_lookup_lenovo_psref(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        code = str(args.get("code", "")).strip()
+        force_refresh = bool(args.get("force_refresh", False))
+        spec = await psref_service.lookup(code, force_refresh=force_refresh)
+        return {
+            **spec,
+            "formatted_context": format_psref_llm_context(spec) if spec.get("found") else spec.get("error", "Not found"),
         }
 
 tool_registry = ToolRegistry()

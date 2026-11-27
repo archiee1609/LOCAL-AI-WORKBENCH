@@ -13,6 +13,7 @@ from app.services.ollama_service import ollama_service
 from app.services.tool_registry import tool_registry
 from app.services.web_search_service import web_search_service
 from app.services.lenovo_kb_service import lenovo_kb_service
+from app.services.psref_service import psref_service, detect_psref_intent, format_psref_llm_context
 from app.schemas.chat import (
     ConversationCreate,
     ConversationUpdate,
@@ -307,6 +308,21 @@ async def chat_completions(req: ChatCompletionRequest):
         max_iterations = settings.max_tool_iterations
 
         try:
+            # Automatic Lenovo PSREF lookup whenever MTM or spec query is entered
+            psref_intent = detect_psref_intent(req.message)
+            web_search_enabled = req.enable_web_search if req.enable_web_search is not None else settings.enable_web_search
+            psref_data: Optional[Dict[str, Any]] = None
+            if psref_intent:
+                if web_search_enabled:
+                    psref_data = await psref_service.lookup(psref_intent["code"])
+                else:
+                    psref_data = psref_service.get_cached(psref_intent["code"])
+                if psref_data and psref_data.get("found"):
+                    yield f"data: {json.dumps({'type': 'psref_results', 'query': psref_intent['code'], 'result': psref_data})}\n\n"
+                    psref_ctx = format_psref_llm_context(psref_data)
+                    if psref_ctx:
+                        current_messages.append({"role": "system", "content": psref_ctx})
+
             # Lenovo Tips & Resources Knowledge Base grounding (strictly when user requests tips/KB or videos)
             kb_intent = lenovo_kb_service.detect_chat_kb_intent(req.message)
             if kb_intent["show_tips"] or kb_intent["show_video"]:
@@ -316,8 +332,13 @@ async def chat_completions(req: ChatCompletionRequest):
                     else None
                 )
                 search_limit = 12 if (kb_intent["show_tips"] and not kb_intent["show_video"]) else 6
+                kb_query = req.message
+                if psref_data and psref_data.get("found"):
+                    mt_hint = psref_data.get("machine_type", "")
+                    prod_hint = psref_data.get("product_name", "")
+                    kb_query = f"{req.message} {prod_hint} {mt_hint}".strip()
                 kb_matches = lenovo_kb_service.search(
-                    req.message,
+                    kb_query,
                     limit=search_limit,
                     source_type=source_filter,
                     min_score=20.0,
@@ -333,8 +354,7 @@ async def chat_completions(req: ChatCompletionRequest):
                     })
 
             # Proactive search intent detection and factual augmentation
-            search_intent_query = web_search_service.detect_search_intent(req.message)
-            web_search_enabled = req.enable_web_search if req.enable_web_search is not None else settings.enable_web_search
+            search_intent_query = None if psref_intent else web_search_service.detect_search_intent(req.message)
             if search_intent_query and web_search_enabled:
                 yield f"data: {json.dumps({'type': 'search_progress', 'query': search_intent_query, 'status': 'searching'})}\n\n"
                 search_results = await web_search_service.search(search_intent_query, max_results=5)

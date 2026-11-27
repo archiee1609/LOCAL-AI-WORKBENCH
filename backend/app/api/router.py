@@ -12,12 +12,14 @@ from app.api.reports import router as reports_router
 from app.api.voice import router as voice_router
 from app.api.accounts import router as accounts_router
 from app.api.kb import router as kb_router
+from app.api.psref import router as psref_router
 
 api_router = APIRouter(prefix="/api")
 
 api_router.include_router(health_router)
 api_router.include_router(accounts_router)
 api_router.include_router(kb_router)
+api_router.include_router(psref_router)
 api_router.include_router(ollama_router)
 api_router.include_router(chat_router)
 api_router.include_router(tools_router)

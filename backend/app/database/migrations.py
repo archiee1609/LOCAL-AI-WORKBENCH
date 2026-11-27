@@ -215,6 +215,15 @@ CREATE INDEX IF NOT EXISTS idx_kb_entries_canonical ON kb_entries(canonical_key)
 CREATE INDEX IF NOT EXISTS idx_kb_entries_source_file ON kb_entries(source_file);
 CREATE INDEX IF NOT EXISTS idx_kb_entries_type ON kb_entries(source_type);
 CREATE INDEX IF NOT EXISTS idx_kb_entries_qi ON kb_entries(confirmed_qi);
+
+CREATE TABLE IF NOT EXISTS psref_cache (
+    code TEXT PRIMARY KEY,
+    lookup_type TEXT DEFAULT 'mtm',
+    product_name TEXT DEFAULT '',
+    psref_url TEXT DEFAULT '',
+    payload_json TEXT DEFAULT '{}',
+    fetched_at TEXT NOT NULL
+);
 """
 
 async def run_migrations() -> None:
@@ -243,6 +252,21 @@ async def run_migrations() -> None:
         pass
     try:
         await db.execute("CREATE INDEX IF NOT EXISTS idx_conversations_user ON conversations(user_id)")
+    except Exception:
+        pass
+    try:
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS psref_cache (
+                code TEXT PRIMARY KEY,
+                lookup_type TEXT DEFAULT 'mtm',
+                product_name TEXT DEFAULT '',
+                psref_url TEXT DEFAULT '',
+                payload_json TEXT DEFAULT '{}',
+                fetched_at TEXT NOT NULL
+            )
+            """
+        )
     except Exception:
         pass
     logger.info("Database schema initialized successfully.")
