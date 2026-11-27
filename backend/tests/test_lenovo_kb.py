@@ -425,3 +425,307 @@ def test_streamlit_chat_and_explorer_video_playback_persistence():
         search_inp.set_value("Flex 2 Pro 15").run()
         assert len(at.exception) == 0
         assert any("_part_sel" in (sb.key or "") for sb in at.selectbox)
+
+
+def test_chat_kb_intent_gating_no_unsolicited_tips_or_videos(tmp_path):
+    """
+    Known Tips and Part Removal Videos must ONLY appear in chat when explicitly asked for.
+    Drafting emails, general questions, and non-KB tasks must never attach KB tips or videos.
+    """
+    iso_db, assets_dir = _make_isolated_kb(tmp_path)
+    svc = LenovoKBService()
+    kb_dir = Path(__file__).parent.parent.parent / "Tips & Resources"
+
+    with patch.object(kb_mod, "db", iso_db):
+        svc.sync_knowledge_base(force=False, kb_dir=kb_dir, assets_dir=assets_dir)
+
+        # 1. Email drafting & general tasks (even with Lenovo model/issue/replace/number mentions) -> neither tips nor video
+        for non_kb_prompt in [
+            "draft a mail",
+            "draft a mail to customer regarding LOQ 15IRX9",
+            "draft an email about ThinkPad T14 keyboard replacement delay",
+            "write an email apologizing for ThinkPad E14 freezing issue",
+            "compose a reply mentioning 21CB WWAN and 100 units",
+            "draft a mail with tips to keep the team aligned",
+            "what are the specs of Lenovo LOQ 15IRX9?",
+            "compare ThinkPad T14 and IdeaPad 5",
+            "21CB WWAN error",
+            "Write a Python merge sort",
+            "give me tips for writing a good resume",
+            "find a Python tutorial video",
+        ]:
+            res = svc.detect_chat_kb_intent(non_kb_prompt)
+            assert res == {"show_tips": False, "show_video": False}, f"Unexpected KB trigger for: {non_kb_prompt!r} -> {res}"
+
+        # 2. Explicit tips / KB requests (without asking for a video) -> tips ONLY, NO video
+        for tips_prompt in [
+            "/tips ThinkPad T14 Gen 6 auto restart issue",
+            "/kb 21CB WWAN",
+            "!tips LOQ 15IRX9",
+            "show me known tips for LOQ 15IRX9",
+            "show tips for ThinkPad T14",
+            "any known issues on LOQ 15IRX9?",
+            "search lenovo kb for POST 2100",
+            "show me known tips for LOQ 15IRX9 keyboard replacement",
+            "draft a mail and show me the known tips for LOQ 15IRX9",
+        ]:
+            res = svc.detect_chat_kb_intent(tips_prompt)
+            assert res == {"show_tips": True, "show_video": False}, f"Expected tips-only for: {tips_prompt!r} -> {res}"
+
+        # 3. Explicit video requests -> video ONLY, NO unrelated tips
+        for vid_prompt in [
+            "show me the part removal video for LOQ 15IRX9",
+            "ThinkPad T14 Gen 1 part removal video",
+            "LOQ 15IRX9 keyboard removal video",
+            "battery removal video for Flex 2 Pro 15",
+            "play SSD replacement video for ThinkPad T14",
+            "/tips ThinkPad T14 Gen 1 part removal video",
+            "https://support.lenovo.com/us/en/solutions/HT510512",
+        ]:
+            res = svc.detect_chat_kb_intent(vid_prompt)
+            assert res == {"show_tips": False, "show_video": True}, f"Expected video-only for: {vid_prompt!r} -> {res}"
+
+        # 4. Combined request -> both tips and video
+        both_res = svc.detect_chat_kb_intent("show known tips and part removal video for LOQ 15IRX9")
+        assert both_res == {"show_tips": True, "show_video": True}
+
+    iso_db.close()
+
+
+def test_resolve_video_and_history_extraction_respect_video_intent():
+    """
+    Verify resolve_chat_kb_videos does not trigger solely because a video_guide appears
+    in search results, and saved Known Tips/email messages with HT links do not spawn a player.
+    """
+    from app.services.lenovo_kb_service import (
+        extract_kb_video_meta_from_text,
+        resolve_chat_kb_videos,
+    )
+
+    fake_matches = [
+        {
+            "source_type": "known_issue",
+            "title": "LOQ 15IRX9 BIOS Issue",
+            "links": [{"label": "Ref", "url": "https://support.lenovo.com/us/en/solutions/HT515879"}],
+        },
+        {
+            "source_type": "video_guide",
+            "title": "Part Removal Video: Lenovo LOQ 15IRX9",
+            "links": [{"label": "Video", "url": "https://support.lenovo.com/us/en/solutions/HT515879"}],
+        },
+    ]
+
+    # Without explicit video intent in chat, video_guide in matches must NOT resolve or play a video
+    assert resolve_chat_kb_videos("show known tips for LOQ 15IRX9", fake_matches, require_video_intent=True) is None
+    assert resolve_chat_kb_videos("LOQ 15IRX9 keyboard replacement tips", fake_matches, require_video_intent=True) is None
+
+    # A drafted email or Known Tips citation containing a Lenovo HT link must NOT spawn a video player on rerun
+    email_text = "Subject: Update\n\nPlease review https://pcsupport.lenovo.com/us/en/solutions/ht515879 for details."
+    assert extract_kb_video_meta_from_text(email_text, user_prompt="draft a mail about LOQ 15IRX9") is None
+    tips_text = (
+        "Here are the known tips.\n\n---\n"
+        "**📚 Lenovo Tips & Resources Citations (1 match(es)):**\n"
+        "- **[KB-1]** LOQ 15IRX9 BIOS Issue — [Open Reference](https://pcsupport.lenovo.com/us/en/solutions/ht515879)"
+    )
+    assert extract_kb_video_meta_from_text(tips_text, user_prompt="show known tips for LOQ 15IRX9") is None
+
+    # Only persisted kb_video_meta or explicit video request restores the video player
+    assert extract_kb_video_meta_from_text(email_text, user_prompt="show part removal video for LOQ 15IRX9") is not None
+
+
+def _create_isolated_conv(username: str = "achakrabort4", model: str = "gemma4:12b") -> str:
+    import datetime, uuid
+    import streamlit as st
+    from app.database.connection import db
+    conv_id = str(uuid.uuid4())
+    now = datetime.datetime.now().isoformat()
+    db._execute_sync(
+        """
+        INSERT INTO conversations (id, title, model, system_prompt, temperature, context_length, created_at, updated_at, user_id)
+        VALUES (?, ?, ?, '', 0.7, 8192, ?, ?, ?)
+        """,
+        (conv_id, "KB Gate Test", model, now, now, username),
+    )
+    st.cache_data.clear()
+    return conv_id
+
+
+def _cleanup_test_conv(conv_id):
+    if not conv_id:
+        return
+    try:
+        from app.database.connection import db
+        db._execute_sync("DELETE FROM messages WHERE conversation_id = ?", (conv_id,))
+        db._execute_sync("DELETE FROM conversations WHERE id = ?", (conv_id,))
+    except Exception:
+        pass
+
+
+def test_streamlit_chat_draft_mail_shows_no_tips_or_video(tmp_path):
+    """End-to-end Streamlit chat test: drafting a mail about LOQ 15IRX9 shows ONLY the drafted mail."""
+    from app.services import ollama_service as ollama_mod
+
+    app_path = Path(__file__).parent.parent.parent / "streamlit_app.py"
+
+    async def _fake_stream_detailed(*args, **kwargs):
+        yield {"type": "content", "text": "Subject: LOQ 15IRX9 Status Update\n\nDear Customer,\nYour LOQ 15IRX9 unit update is ready."}
+
+    conv_id = _create_isolated_conv("achakrabort4")
+    try:
+        with patch.object(ollama_mod.ollama_service, "chat_stream_detailed", side_effect=_fake_stream_detailed):
+            at = AppTest.from_file(str(app_path.resolve()), default_timeout=30)
+            at.session_state["authenticated_user"] = {
+                "name": "Archiman Chakraborty",
+                "username": "achakrabort4",
+                "role": "User",
+                "workspace_path": str(Path(__file__).parent.parent.parent / "workspace" / "achakrabort4"),
+            }
+            at.query_params["conv"] = conv_id
+            at.run()
+            assert len(at.exception) == 0
+            assert at.session_state["active_conv_id"] == conv_id
+
+            # Submit a request to draft an email mentioning LOQ 15IRX9
+            at.session_state["prompt_input"] = "draft a mail to customer regarding Lenovo LOQ 15IRX9"
+            at.run()
+            assert len(at.exception) == 0
+
+            last_msg = at.session_state["messages"][-1]
+            assert last_msg["role"] == "assistant"
+            assert "LOQ 15IRX9 Status Update" in last_msg["content"]
+            assert "Lenovo Tips & Resources Citations" not in last_msg["content"]
+            assert "Redirected Video Stream" not in last_msg["content"]
+            assert "kb_video_meta" not in last_msg["content"]
+            assert last_msg.get("images", []) == []
+
+            all_md = "\n".join(m.value for m in at.markdown)
+            assert "LOQ 15IRX9 Status Update" in all_md
+            assert "Lenovo Tips & Resources Citations" not in all_md
+            assert "Redirected Video Stream" not in all_md
+            assert "Auto-Matched Video Player" not in all_md
+            assert not any("_part_sel" in (sb.key or "") for sb in at.selectbox)
+    finally:
+        _cleanup_test_conv(conv_id)
+
+
+def test_streamlit_chat_tips_vs_video_separation(tmp_path):
+    """End-to-end Streamlit chat test: asking for tips shows tips only; asking for video shows video only."""
+    from app.services import ollama_service as ollama_mod
+
+    app_path = Path(__file__).parent.parent.parent / "streamlit_app.py"
+    mock_bundle = {
+        "solution_id": "HT515879",
+        "original_url": "https://support.lenovo.com/us/en/solutions/HT515879",
+        "resolved_url": "https://pcsupport.lenovo.com/us/en/solutions/ht515879",
+        "cdn_script_url": "",
+        "page_title": "Part Removal Video: Lenovo LOQ 15IRX9",
+        "videos": [
+            {
+                "title": "KeyboardBezel/LCD Assembly",
+                "url": "https://download.lenovo.com/lts/MCNW2930/FOF/KeyboardBezel.mp4",
+                "video_type": "mp4",
+                "action_type": "guide",
+                "match_score": 10.0,
+            }
+        ],
+        "recommended_video": {
+            "title": "KeyboardBezel/LCD Assembly",
+            "url": "https://download.lenovo.com/lts/MCNW2930/FOF/KeyboardBezel.mp4",
+            "video_type": "mp4",
+            "action_type": "guide",
+            "match_score": 10.0,
+        },
+        "best_index": 0,
+        "manuals": [],
+        "error": "",
+        "cached": True,
+    }
+
+    async def _fake_stream_tips(*args, **kwargs):
+        yield {"type": "content", "text": "Here are the known tips for LOQ 15IRX9."}
+
+    conv_id1 = _create_isolated_conv("achakrabort4")
+    conv_id2 = _create_isolated_conv("achakrabort4")
+    try:
+        # 1. Tips-only request -> Known Tips citations shown, NO video player
+        with patch.object(ollama_mod.ollama_service, "chat_stream_detailed", side_effect=_fake_stream_tips), \
+             patch.object(kb_mod.lenovo_kb_service, "resolve_solution_videos", return_value=mock_bundle) as mock_vid:
+            at = AppTest.from_file(str(app_path.resolve()), default_timeout=30)
+            at.session_state["authenticated_user"] = {
+                "name": "Archiman Chakraborty",
+                "username": "achakrabort4",
+                "role": "User",
+                "workspace_path": str(Path(__file__).parent.parent.parent / "workspace" / "achakrabort4"),
+            }
+            at.query_params["conv"] = conv_id1
+            at.run()
+            assert at.session_state["active_conv_id"] == conv_id1
+            at.session_state["prompt_input"] = "show me known tips for LOQ 15IRX9"
+            at.run()
+            assert len(at.exception) == 0
+            mock_vid.assert_not_called()
+            all_md = "\n".join(m.value for m in at.markdown)
+            assert "Lenovo Tips & Resources Citations" in all_md
+            assert "Part Removal Video" not in all_md
+            assert "Auto-Matched Video Player" not in all_md
+
+        async def _fake_stream_video(*args, **kwargs):
+            yield {"type": "content", "text": "Here is the LOQ 15IRX9 part removal video."}
+
+        # 2. Video-only request -> Video player shown, NO Known Tips citations list
+        with patch.object(ollama_mod.ollama_service, "chat_stream_detailed", side_effect=_fake_stream_video), \
+             patch.object(kb_mod.lenovo_kb_service, "resolve_solution_videos", return_value=mock_bundle):
+            at2 = AppTest.from_file(str(app_path.resolve()), default_timeout=30)
+            at2.session_state["authenticated_user"] = {
+                "name": "Archiman Chakraborty",
+                "username": "achakrabort4",
+                "role": "User",
+                "workspace_path": str(Path(__file__).parent.parent.parent / "workspace" / "achakrabort4"),
+            }
+            at2.query_params["conv"] = conv_id2
+            at2.run()
+            assert at2.session_state["active_conv_id"] == conv_id2
+            at2.session_state["prompt_input"] = "show me the part removal video for LOQ 15IRX9"
+            at2.run()
+            assert len(at2.exception) == 0
+            all_md2 = "\n".join(m.value for m in at2.markdown)
+            assert "Redirected Video Stream" in all_md2
+            assert "Auto-Matched Video Player" in all_md2
+            assert "Lenovo Tips & Resources Citations" not in all_md2
+    finally:
+        _cleanup_test_conv(conv_id1)
+        _cleanup_test_conv(conv_id2)
+
+
+def test_fastapi_chat_completions_respects_kb_gating():
+    """Verify FastAPI SSE /api/chat/completions only emits kb_results when user asks for tips or video."""
+    from unittest.mock import AsyncMock
+    from app.services import ollama_service as ollama_mod
+
+    client = TestClient(app)
+    conv_res = client.post("/api/chat/conversations", json={"title": "KB Gate Test", "model": "gemma4:12b"})
+    assert conv_res.status_code == 200
+    conv_id = conv_res.json()["id"]
+
+    async def _fake_stream_chat(*args, **kwargs):
+        yield {"message": {"content": "Drafted email content."}}
+
+    try:
+        with patch.object(ollama_mod.ollama_service, "stream_chat", side_effect=_fake_stream_chat):
+            # 1. Draft mail -> NO kb_results SSE event
+            res_mail = client.post(
+                "/api/chat/completions",
+                json={"conversation_id": conv_id, "message": "draft a mail about LOQ 15IRX9", "enable_tools": False},
+            )
+            assert res_mail.status_code == 200
+            assert '"type": "kb_results"' not in res_mail.text
+
+            # 2. Ask for known tips -> emits kb_results SSE event
+            res_tips = client.post(
+                "/api/chat/completions",
+                json={"conversation_id": conv_id, "message": "show known tips for LOQ 15IRX9", "enable_tools": False},
+            )
+            assert res_tips.status_code == 200
+            assert '"type": "kb_results"' in res_tips.text
+    finally:
+        client.delete(f"/api/chat/conversations/{conv_id}")

@@ -48,6 +48,9 @@ data/backups/*.db
 generated_images/*
 !generated_images/.gitkeep
 
+# ComfyUI (disabled / excluded from repository)
+ComfyUI/
+
 # Operating System
 .DS_Store
 Thumbs.db

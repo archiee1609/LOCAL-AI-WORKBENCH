@@ -20,6 +20,11 @@ def test_streamlit_unauthenticated_shows_login_portal():
 
 def test_streamlit_app_renders_when_authenticated():
     """Headless Streamlit UI test verifying zero exceptions when user is authenticated."""
+    from app.database.connection import db
+    existing_before = {
+        r["id"]
+        for r in db._fetchall_sync("SELECT id FROM conversations WHERE user_id = ?", ("achakrabort4",))
+    }
     app_path = Path(__file__).parent.parent.parent / "streamlit_app.py"
     at = AppTest.from_file(str(app_path.resolve()), default_timeout=30)
     at.session_state["authenticated_user"] = {
@@ -45,7 +50,52 @@ def test_streamlit_app_renders_when_authenticated():
     # Verify Chat History was moved out of sidebar into top-right header dropdown, and Options popover was removed
     assert not any("Recent Chats" in m.value for m in at.sidebar.markdown)
     assert any(ti.key == "header_chat_history_filter" for ti in at.text_input)
+    assert any(b.key == "header_new_chat_btn" for b in at.button)
     assert not any(ti.key == "rename_chat_input" for ti in at.text_input)
+
+    # Verify clicking "New Chat" in Recent Chats popover creates and switches to a new conversation
+    prev_conv_id = at.session_state["active_conv_id"]
+    new_btn = next(b for b in at.button if b.key == "header_new_chat_btn")
+    new_btn.click().run()
+    assert len(at.exception) == 0
+    new_conv_id = at.session_state["active_conv_id"]
+    assert new_conv_id != prev_conv_id
+    assert at.session_state["messages"] == []
+
+    # Verify pinning an older conversation moves it to the top of Recent Chats, and unpinning restores it
+    pin_prev = next(b for b in at.button if b.key == f"pin_{prev_conv_id}")
+    pin_prev.click().run()
+    assert len(at.exception) == 0
+    pinned_row = db._fetchone_sync("SELECT is_pinned FROM conversations WHERE id = ?", (prev_conv_id,))
+    assert pinned_row and pinned_row["is_pinned"] == 1
+    chat_btn_keys = [b.key for b in at.button if (b.key or "").startswith("ch_")]
+    assert chat_btn_keys.index(f"ch_{prev_conv_id}") < chat_btn_keys.index(f"ch_{new_conv_id}")
+
+    unpin_prev = next(b for b in at.button if b.key == f"pin_{prev_conv_id}")
+    unpin_prev.click().run()
+    assert len(at.exception) == 0
+    unpinned_row = db._fetchone_sync("SELECT is_pinned FROM conversations WHERE id = ?", (prev_conv_id,))
+    assert unpinned_row and unpinned_row["is_pinned"] == 0
+
+    # Verify inline rename updates both SQLite and chat header without exposing rename_chat_input by default
+    ren_new = next(b for b in at.button if b.key == f"ren_{new_conv_id}")
+    ren_new.click().run()
+    assert len(at.exception) == 0
+    rename_ti = next(ti for ti in at.text_input if ti.key == f"rename_input_{new_conv_id}")
+    rename_ti.input("Quarterly Review Notes").run()
+    save_ren = next(b for b in at.button if b.key == f"save_ren_{new_conv_id}")
+    save_ren.click().run()
+    assert len(at.exception) == 0
+    assert not any(ti.key == f"rename_input_{new_conv_id}" for ti in at.text_input)
+    renamed_row = db._fetchone_sync("SELECT title FROM conversations WHERE id = ?", (new_conv_id,))
+    assert renamed_row and renamed_row["title"] == "Quarterly Review Notes"
+    assert any("Quarterly Review Notes" in m.value for m in at.markdown)
+
+    # Clean up only conversations created by this test
+    for cid in (prev_conv_id, new_conv_id):
+        if cid not in existing_before:
+            db._execute_sync("DELETE FROM messages WHERE conversation_id = ?", (cid,))
+            db._execute_sync("DELETE FROM conversations WHERE id = ?", (cid,))
 
 
 def test_streamlit_settings_page_renders_cleanly():

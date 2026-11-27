@@ -33,7 +33,7 @@ async def list_conversations(user_id: Optional[str] = Query(None)):
             LEFT JOIN messages m ON c.id = m.conversation_id
             WHERE c.user_id = ?
             GROUP BY c.id
-            ORDER BY c.updated_at DESC
+            ORDER BY COALESCE(c.is_pinned, 0) DESC, c.updated_at DESC
             """,
             (user_id,)
         )
@@ -44,7 +44,7 @@ async def list_conversations(user_id: Optional[str] = Query(None)):
             FROM conversations c
             LEFT JOIN messages m ON c.id = m.conversation_id
             GROUP BY c.id
-            ORDER BY c.updated_at DESC
+            ORDER BY COALESCE(c.is_pinned, 0) DESC, c.updated_at DESC
             """
         )
     return [
@@ -58,7 +58,8 @@ async def list_conversations(user_id: Optional[str] = Query(None)):
             created_at=r["created_at"],
             updated_at=r["updated_at"],
             message_count=r["message_count"],
-            user_id=r["user_id"] if "user_id" in r.keys() else ""
+            user_id=r["user_id"] if "user_id" in r.keys() else "",
+            is_pinned=bool(r["is_pinned"]) if "is_pinned" in r.keys() and r["is_pinned"] is not None else False,
         )
         for r in rows
     ]
@@ -151,20 +152,33 @@ async def update_conversation(conversation_id: str, req: ConversationUpdate):
     if not conv:
         raise HTTPException(status_code=404, detail="Conversation not found.")
     
-    now = datetime.datetime.now().isoformat()
-    new_title = req.title if req.title is not None else conv["title"]
+    conv_keys = conv.keys()
+    current_pinned = bool(conv["is_pinned"]) if "is_pinned" in conv_keys and conv["is_pinned"] is not None else False
+    if req.title is not None:
+        cleaned_title = req.title.strip()
+        if not cleaned_title:
+            raise HTTPException(status_code=400, detail="Conversation title cannot be empty.")
+        new_title = cleaned_title
+    else:
+        new_title = conv["title"]
+
     new_model = req.model if req.model is not None else conv["model"]
     new_sys = req.system_prompt if req.system_prompt is not None else conv["system_prompt"]
     new_temp = req.temperature if req.temperature is not None else conv["temperature"]
     new_ctx = req.context_length if req.context_length is not None else conv["context_length"]
+    new_pinned = req.is_pinned if req.is_pinned is not None else current_pinned
+    has_non_pin_change = any(
+        val is not None for val in (req.title, req.model, req.system_prompt, req.temperature, req.context_length)
+    )
+    updated_at = datetime.datetime.now().isoformat() if has_non_pin_change else conv["updated_at"]
 
     await db.execute(
         """
         UPDATE conversations
-        SET title = ?, model = ?, system_prompt = ?, temperature = ?, context_length = ?, updated_at = ?
+        SET title = ?, model = ?, system_prompt = ?, temperature = ?, context_length = ?, is_pinned = ?, updated_at = ?
         WHERE id = ?
         """,
-        (new_title, new_model, new_sys, new_temp, new_ctx, now, conversation_id)
+        (new_title, new_model, new_sys, new_temp, new_ctx, 1 if new_pinned else 0, updated_at, conversation_id)
     )
 
     return ConversationResponse(
@@ -175,9 +189,10 @@ async def update_conversation(conversation_id: str, req: ConversationUpdate):
         temperature=new_temp,
         context_length=new_ctx,
         created_at=conv["created_at"],
-        updated_at=now,
+        updated_at=updated_at,
         message_count=0,
-        user_id=conv["user_id"] if "user_id" in conv.keys() else ""
+        user_id=conv["user_id"] if "user_id" in conv_keys else "",
+        is_pinned=new_pinned,
     )
 
 @router.delete("/conversations/{conversation_id}")
@@ -292,9 +307,23 @@ async def chat_completions(req: ChatCompletionRequest):
         max_iterations = settings.max_tool_iterations
 
         try:
-            # Proactive Lenovo Tips & Resources Knowledge Base grounding
-            if lenovo_kb_service.detect_lenovo_intent(req.message):
-                kb_matches = lenovo_kb_service.search(req.message, limit=6, min_score=30.0)
+            # Lenovo Tips & Resources Knowledge Base grounding (strictly when user requests tips/KB or videos)
+            kb_intent = lenovo_kb_service.detect_chat_kb_intent(req.message)
+            if kb_intent["show_tips"] or kb_intent["show_video"]:
+                source_filter = (
+                    "video_guide"
+                    if (kb_intent["show_video"] and not kb_intent["show_tips"])
+                    else None
+                )
+                search_limit = 12 if (kb_intent["show_tips"] and not kb_intent["show_video"]) else 6
+                kb_matches = lenovo_kb_service.search(
+                    req.message,
+                    limit=search_limit,
+                    source_type=source_filter,
+                    min_score=20.0,
+                )
+                if kb_intent["show_tips"] and not kb_intent["show_video"]:
+                    kb_matches = [m for m in kb_matches if m.get("source_type") != "video_guide"][:6]
                 if kb_matches:
                     yield f"data: {json.dumps({'type': 'kb_results', 'query': req.message, 'results': kb_matches})}\n\n"
                     kb_context_block = lenovo_kb_service.format_context_for_llm(req.message, kb_matches)

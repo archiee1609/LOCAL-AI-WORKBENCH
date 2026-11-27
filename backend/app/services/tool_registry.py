@@ -392,8 +392,10 @@ class ToolRegistry:
                 name="search_lenovo_kb",
                 description=(
                     "Searches the internal Lenovo 'Tips & Resources' knowledge base "
-                    "(AP Known Issues, Known Tips, LEAP Tips, and Thursday Tech Tips) by model name, "
-                    "4-character Machine Type (MT), FRU/PD/APTT code, or hardware/driver symptom."
+                    "(AP Known Issues, Known Tips, LEAP Tips, Thursday Tech Tips, and Part Removal Videos) "
+                    "by model name, 4-character Machine Type (MT), FRU/PD/APTT code, or hardware/driver symptom. "
+                    "ONLY call this tool when the user explicitly asks for known tips, known issues, KB records, "
+                    "or part removal videos—do NOT call it for general tasks such as drafting emails or writing."
                 ),
                 parameters={
                     "type": "object",

@@ -233,6 +233,60 @@ def _sha256_file(path: Path) -> str:
     return h.hexdigest()
 
 
+_CHAT_NON_KB_TASK_RE = re.compile(
+    r"(?:^\s*(?:please\s+|can\s+you\s+|could\s+you\s+|would\s+you\s+|help\s+me\s+|i\s+want\s+you\s+to\s+|kindly\s+)*"
+    r"(?:"
+    r"(?:draft|write|compose|create|prepare|craft|generate|format|send|type|make)\s+"
+    r"(?:a|an|the|me\s+a|me\s+an|us\s+a|this|one)?\s*(?:[a-z]+\s+){0,2}"
+    r"(?:e-?mail|mail|message|letter|reply|response|note|memo|announcement|invitation|"
+    r"cover\s+letter|resume|cv|essay|story|poem|blog|script|program|code|function|class)\b"
+    r"|(?:reply|respond)\s+to\s+(?:this|the|a|an|my|customer)\s*(?:e-?mail|mail|message|letter|ticket)?\b"
+    r"|(?:rewrite|rephrase|proofread|polish|improve|translate|summarize|summarise)\b"
+    r"))"
+    r"|\b(?:draft(?:ing)?\s+(?:a|an|the|this)?\s*(?:e-?mail|mail|message|letter|reply)|"
+    r"(?:e-?mail|mail)\s+(?:draft|template))\b",
+    re.IGNORECASE,
+)
+
+_CHAT_EXPLICIT_TIPS_PHRASE_RE = re.compile(
+    r"\b(?:"
+    r"known\s+tips?|known\s+issues?|leap\s+tips?|thursday\s+tech\s+tips?|ap\s+known\s+issues?|"
+    r"lenovo\s+(?:kb|tips?|known\s+issues?|knowledge\s+base)|knowledge\s+base|confirmed\s+qi|qi\s+list|"
+    r"qdts|critsit|aptt\d*"
+    r")\b",
+    re.IGNORECASE,
+)
+
+_CHAT_TIPS_WORD_RE = re.compile(
+    r"\b(?:tips?|tech\s+tips?|kb|known\s+problems?|troubleshooting\s+tips?|service\s+tips?)\b",
+    re.IGNORECASE,
+)
+
+_CHAT_TIPS_REQUEST_ACTION_RE = re.compile(
+    r"\b(?:show|give|get|find|search|check|list|fetch|display|include|attach|share|provide|look\s*up)\b"
+    r".{0,45}\b(?:known\s+tips?|known\s+issues?|leap\s+tips?|thursday\s+tech\s+tips?|lenovo\s+kb|knowledge\s+base|confirmed\s+qi)\b",
+    re.IGNORECASE,
+)
+
+_CHAT_VIDEO_WORD_RE = re.compile(
+    r"\b(?:videos?|part\s+removal\s+videos?|removal\s+videos?|replacement\s+videos?|disassembly\s+videos?|teardown\s+videos?)\b"
+    r"|\b(?:play|watch|stream)\b.{0,40}\b(?:video|videos|clip|ht\d{4,})\b",
+    re.IGNORECASE,
+)
+
+_CHAT_EXPLICIT_VIDEO_ACTION_RE = re.compile(
+    r"\b(?:show|give|get|find|search|play|watch|include|attach|send|share|open|stream|load)\b"
+    r".{0,45}\b(?:videos?|clip)\b",
+    re.IGNORECASE,
+)
+
+_BARE_LENOVO_VIDEO_URL_RE = re.compile(
+    r"^\s*(?:https?://(?:pc)?support\.lenovo\.com/[^\s]+/solutions/HT\d{4,}\S*|"
+    r"https?://[^\s]+\.(?:mp4|webm|m4v|mov|m3u8)(?:\?[^\s]*)?)\s*$",
+    re.IGNORECASE,
+)
+
+
 class LenovoKBService:
     """Service managing ingestion, incremental sync, deduplication, and hybrid search for Lenovo KB."""
 
@@ -286,7 +340,7 @@ class LenovoKBService:
             for r in rows:
                 for token in re.split(r"[,\s;]+", str(r.get("machine_types") or "")):
                     tok = token.strip().upper()
-                    if 3 <= len(tok) <= 6 and tok.isalnum() and any(ch.isdigit() for ch in tok):
+                    if 4 <= len(tok) <= 6 and tok.isalnum() and any(ch.isdigit() for ch in tok):
                         if not (tok.isdigit() and 2015 <= int(tok) <= 2035):
                             mts.add(tok)
             self._known_mt_cache = mts
@@ -1339,15 +1393,72 @@ class LenovoKBService:
         if any(re.search(pat, q, re.IGNORECASE) for pat in model_patterns):
             return True
 
-        # Check against actual indexed Machine Types (3-6 chars like 21CB, 20S0, 0302, 10050, Z380) in SQLite
+        # Check against actual indexed Machine Types (4-6 chars like 21CB, 20S0, 0302, 10050) in SQLite
         self.ensure_synced()
         if not self._known_mt_cache:
             self._refresh_known_mt_cache()
-        tokens = set(re.findall(r"\b[A-Z0-9]{3,6}\b", q.upper()))
+        tokens = set(re.findall(r"\b[A-Z0-9]{4,6}\b", q.upper()))
         if tokens & self._known_mt_cache:
             return True
 
         return False
+
+    def detect_chat_kb_intent(self, query: str) -> Dict[str, bool]:
+        """
+        Determines whether a chat message explicitly requests Lenovo Known Tips/KB
+        and/or a Lenovo part-removal Video.
+
+        Prevents unsolicited KB citations or hardware removal videos from appearing on
+        general requests (e.g., drafting emails, summarizing, coding, or casual device mentions).
+        """
+        if not query or not query.strip():
+            return {"show_tips": False, "show_video": False}
+
+        q = query.strip()
+        ql = q.lower()
+
+        explicit_cmd = bool(re.match(r"^(?:/tips|/kb|!tips|!kb)(?:\s|$)", ql))
+        query_body = re.sub(r"^(?:/tips|/kb|!tips|!kb)\s*", "", q, flags=re.IGNORECASE).strip()
+        is_non_kb_task = (not explicit_cmd) and bool(_CHAT_NON_KB_TASK_RE.search(q))
+
+        has_lenovo_ctx = (
+            explicit_cmd
+            or self.detect_lenovo_intent(query_body or q)
+            or bool(re.search(r"\b(?:part\s+removal|ht\d{4,}|fru|cru)\b|support\.lenovo\.com", q, re.IGNORECASE))
+        )
+
+        # Video intent: requires explicit request for a video (or bare Lenovo video/solution URL) + Lenovo context
+        if is_non_kb_task:
+            wants_video = bool(_CHAT_EXPLICIT_VIDEO_ACTION_RE.search(q)) and has_lenovo_ctx
+        else:
+            wants_video = (
+                bool(_CHAT_VIDEO_WORD_RE.search(query_body))
+                or bool(_BARE_LENOVO_VIDEO_URL_RE.match(query_body))
+            ) and has_lenovo_ctx
+
+        # Known Tips / KB intent: requires /tips /kb command or explicit request for tips/known issues/KB
+        if is_non_kb_task:
+            wants_tips = bool(_CHAT_TIPS_REQUEST_ACTION_RE.search(q)) and (
+                bool(_CHAT_EXPLICIT_TIPS_PHRASE_RE.search(q)) or has_lenovo_ctx
+            )
+        elif explicit_cmd:
+            # If user invoked /tips specifically for a video without asking for tips/issues, show only the video
+            if wants_video and not (
+                _CHAT_EXPLICIT_TIPS_PHRASE_RE.search(query_body)
+                or _CHAT_TIPS_WORD_RE.search(query_body)
+            ):
+                wants_tips = False
+            else:
+                wants_tips = True
+        else:
+            has_explicit_kb_phrase = bool(_CHAT_EXPLICIT_TIPS_PHRASE_RE.search(query_body))
+            has_tips_word_with_lenovo = bool(_CHAT_TIPS_WORD_RE.search(query_body)) and self.detect_lenovo_intent(query_body)
+            wants_tips = has_explicit_kb_phrase or has_tips_word_with_lenovo
+
+        return {
+            "show_tips": bool(wants_tips),
+            "show_video": bool(wants_video),
+        }
 
     def _tokenize_query(self, query: str) -> Tuple[List[str], List[str], List[str]]:
         """Returns (expanded_terms, exact_codes, mt_tokens)."""
@@ -2178,6 +2289,148 @@ def _score_video_match(video: Dict[str, Any], query_hint: str) -> float:
             score -= 2.0
 
     return score
+
+
+KB_VIDEO_INTENT_RE = re.compile(
+    r"\b(?:video|videos|clip|clips|part\s+removal\s+video|removal\s+video|replacement\s+video|disassembly\s+video|teardown\s+video)\b"
+    r"|\b(?:play|watch|stream)\b.{0,40}\b(?:video|videos|clip|ht\d{4,})\b",
+    re.IGNORECASE,
+)
+LENOVO_SOLUTION_URL_RE = re.compile(
+    r"https?://(?:pc)?support\.lenovo\.com/[^\s\)\"'>]+/solutions/(HT\d{4,})",
+    re.IGNORECASE,
+)
+DIRECT_VIDEO_LINK_RE = re.compile(
+    r"https?://[^\s\)\"'>]+\.(?:mp4|webm|m4v|mov|m3u8)(?:\?[^\s\)\"'>]*)?|https?://(?:www\.)?(?:youtube\.com/(?:watch\?[^#\s\)]*v=|embed/|shorts/)|youtu\.be/)[^\s\)\"'>]+",
+    re.IGNORECASE,
+)
+KB_VIDEO_META_COMMENT_RE = re.compile(r"\n*<!--\s*kb_video_meta:(\{.*?\})\s*-->", re.DOTALL)
+
+
+def rewrite_support_url_for_display(url: str) -> str:
+    m = LENOVO_SOLUTION_URL_RE.search(url or "")
+    if m and "support.lenovo.com" in (url or "").lower():
+        return f"https://pcsupport.lenovo.com/us/en/solutions/{m.group(1).lower()}"
+    return url
+
+
+def find_kb_video_targets(kb_matches: List[Dict[str, Any]]) -> List[Dict[str, str]]:
+    """Collects resolvable video/solution URLs from matched KB entries, prioritizing video_guide records."""
+    ordered = sorted(
+        kb_matches or [],
+        key=lambda m: (0 if m.get("source_type") == "video_guide" else 1),
+    )
+    targets: List[Dict[str, str]] = []
+    seen_urls: Set[str] = set()
+    for item in ordered:
+        for lk in item.get("links") or []:
+            u = str((lk or {}).get("url") or "").strip()
+            if not u or u in seen_urls:
+                continue
+            is_video_url = bool(
+                item.get("source_type") == "video_guide"
+                or LENOVO_SOLUTION_URL_RE.search(u)
+                or DIRECT_VIDEO_LINK_RE.search(u)
+                or "video" in str((lk or {}).get("label") or "").lower()
+            )
+            if is_video_url:
+                seen_urls.add(u)
+                targets.append({
+                    "url": u,
+                    "label": str((lk or {}).get("label") or "Part Removal Video"),
+                    "entry_title": str(item.get("title") or "Lenovo Part Removal Video"),
+                    "source_type": str(item.get("source_type") or ""),
+                })
+    return targets
+
+
+def resolve_chat_kb_videos(
+    query: str,
+    kb_matches: List[Dict[str, Any]],
+    require_video_intent: bool = True,
+    svc: Optional[LenovoKBService] = None,
+) -> Optional[Dict[str, Any]]:
+    """Redirects Lenovo solution links and extracts playable videos matching the user's part/model query."""
+    resolver = svc or lenovo_kb_service
+    targets = find_kb_video_targets(kb_matches)
+    if not targets:
+        url_m = LENOVO_SOLUTION_URL_RE.search(query or "") or DIRECT_VIDEO_LINK_RE.search(query or "")
+        if url_m:
+            raw_u = url_m.group(0)
+            targets = [{
+                "url": raw_u,
+                "label": "Lenovo Video Guide",
+                "entry_title": f"Lenovo Solution {url_m.group(1).upper()}" if LENOVO_SOLUTION_URL_RE.match(raw_u) else "Video Guide",
+                "source_type": "video_guide",
+            }]
+    if not targets:
+        return None
+
+    has_video_intent = bool(KB_VIDEO_INTENT_RE.search(query or ""))
+    if require_video_intent and not has_video_intent:
+        return None
+
+    primary = targets[0]
+    try:
+        res = resolver.resolve_solution_videos(primary["url"], query_hint=query)
+    except Exception:
+        return None
+
+    return {
+        "entry_title": primary["entry_title"],
+        "solution_id": res.get("solution_id", ""),
+        "original_url": res.get("original_url", primary["url"]),
+        "resolved_url": res.get("resolved_url", primary["url"]),
+        "videos": res.get("videos") or [],
+        "recommended_video": res.get("recommended_video"),
+        "best_index": int(res.get("best_index") or 0),
+        "manuals": res.get("manuals") or [],
+        "query_hint": query,
+        "error": res.get("error", ""),
+    }
+
+
+def extract_kb_video_meta_from_text(
+    content: str,
+    user_prompt: str = "",
+    svc: Optional[LenovoKBService] = None,
+) -> Optional[Dict[str, Any]]:
+    """Extracts persisted video bundle metadata from saved assistant markdown only when a video was requested."""
+    txt = content or ""
+    m = KB_VIDEO_META_COMMENT_RE.search(txt)
+    if m:
+        try:
+            meta = json.loads(m.group(1))
+            if isinstance(meta, dict) and (meta.get("resolved_url") or meta.get("original_url") or meta.get("recommended_url")):
+                return meta
+        except Exception:
+            pass
+
+    resolver = svc or lenovo_kb_service
+    user_wanted_video = False
+    if user_prompt:
+        try:
+            user_wanted_video = bool(resolver.detect_chat_kb_intent(user_prompt).get("show_video"))
+        except Exception:
+            user_wanted_video = bool(KB_VIDEO_INTENT_RE.search(user_prompt))
+
+    has_video_banner = ("Redirected Video Stream" in txt) or ("Matched Part Removal Video" in txt)
+    if not (user_wanted_video or has_video_banner):
+        return None
+
+    sol_m = LENOVO_SOLUTION_URL_RE.search(txt)
+    dir_m = DIRECT_VIDEO_LINK_RE.search(txt)
+    if sol_m or dir_m:
+        u = sol_m.group(0) if sol_m else dir_m.group(0)
+        return {
+            "entry_title": f"Lenovo Video Guide ({sol_m.group(1).upper()})" if sol_m else "Part Removal Video",
+            "solution_id": sol_m.group(1).upper() if sol_m else "",
+            "original_url": u,
+            "resolved_url": rewrite_support_url_for_display(u),
+            "query_hint": "",
+            "recommended_url": dir_m.group(0) if dir_m else "",
+        }
+    return None
 
 
 lenovo_kb_service = LenovoKBService()

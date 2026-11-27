@@ -786,6 +786,14 @@ st.markdown("""
         box-shadow: 0 12px 32px rgba(0, 0, 0, 0.70), 0 0 18px rgba(6, 182, 212, 0.20) !important;
         border-radius: 0.85rem !important;
     }
+    [data-testid="stPopoverBody"] [data-testid="stHorizontalBlock"] {
+        gap: 0.35rem !important;
+        align-items: center !important;
+    }
+    [data-testid="stPopoverBody"] [data-testid="stHorizontalBlock"] button {
+        padding: 0.35rem 0.4rem !important;
+        min-height: 2.25rem !important;
+    }
     li[role="option"] {
         color: #cbd5e1 !important;
         font-weight: 500 !important;
@@ -1318,14 +1326,30 @@ def set_preference(key: str, value: str) -> None:
 # ---------------------------------------------------------
 # CONVERSATION & CHAT HISTORY HELPERS (ChatGPT & Gemini Style)
 # ---------------------------------------------------------
+_PIN_COL_ENSURED_PATHS: set[str] = set()
+
+def _ensure_conversations_pin_column() -> None:
+    """Lazily adds is_pinned to conversations for live hot-reloaded processes."""
+    db_key = str(getattr(db, "db_path", ""))
+    if db_key in _PIN_COL_ENSURED_PATHS:
+        return
+    try:
+        cols = [r["name"] for r in db._fetchall_sync("PRAGMA table_info(conversations)")]
+        if cols and "is_pinned" not in cols:
+            db._execute_sync("ALTER TABLE conversations ADD COLUMN is_pinned INTEGER DEFAULT 0")
+    except Exception:
+        pass
+    _PIN_COL_ENSURED_PATHS.add(db_key)
+
 @st.cache_data(ttl=15, show_spinner=False)
 def get_conversations(limit: int = 50, user_id: Optional[str] = None) -> List[Dict[str, Any]]:
     """
     Fetches conversations strictly isolated to the specified user (Rule 2 & Rule 3).
-    Ensures zero cross-user chat leakage.
+    Pinned chats are returned first, followed by most recently updated.
     """
     if not user_id:
         return []
+    _ensure_conversations_pin_column()
     try:
         rows = db._fetchall_sync(
             """
@@ -1334,7 +1358,7 @@ def get_conversations(limit: int = 50, user_id: Optional[str] = None) -> List[Di
             LEFT JOIN messages m ON c.id = m.conversation_id
             WHERE c.user_id = ?
             GROUP BY c.id
-            ORDER BY c.updated_at DESC
+            ORDER BY COALESCE(c.is_pinned, 0) DESC, c.updated_at DESC
             LIMIT ?
             """,
             (user_id, limit)
@@ -1445,16 +1469,47 @@ def delete_conversation(conv_id: str, user_id: Optional[str] = None) -> None:
     except Exception:
         pass
 
-def update_conversation_title(conv_id: str, new_title: str) -> None:
+def update_conversation_title(conv_id: str, new_title: str, user_id: Optional[str] = None) -> bool:
+    """Renames a conversation (scoped to owning user when user_id is provided)."""
+    cleaned_title = (new_title or "").strip()
+    if not cleaned_title:
+        return False
     now = datetime.datetime.now().isoformat()
     try:
-        db._execute_sync(
-            "UPDATE conversations SET title = ?, updated_at = ? WHERE id = ?",
-            (new_title, now, conv_id)
-        )
+        if user_id:
+            db._execute_sync(
+                "UPDATE conversations SET title = ?, updated_at = ? WHERE id = ? AND user_id = ?",
+                (cleaned_title, now, conv_id, user_id)
+            )
+        else:
+            db._execute_sync(
+                "UPDATE conversations SET title = ?, updated_at = ? WHERE id = ?",
+                (cleaned_title, now, conv_id)
+            )
         get_conversations.clear()
+        return True
     except Exception:
-        pass
+        return False
+
+def toggle_conversation_pin(conv_id: str, is_pinned: bool, user_id: Optional[str] = None) -> bool:
+    """Pins or unpins a conversation without altering its chronological timestamp."""
+    _ensure_conversations_pin_column()
+    pin_val = 1 if is_pinned else 0
+    try:
+        if user_id:
+            db._execute_sync(
+                "UPDATE conversations SET is_pinned = ? WHERE id = ? AND user_id = ?",
+                (pin_val, conv_id, user_id)
+            )
+        else:
+            db._execute_sync(
+                "UPDATE conversations SET is_pinned = ? WHERE id = ?",
+                (pin_val, conv_id)
+            )
+        get_conversations.clear()
+        return True
+    except Exception:
+        return False
 
 # Load Stored Memories
 @st.cache_data(ttl=20, show_spinner=False)
@@ -1646,16 +1701,22 @@ with st.sidebar:
     </div>
     """, unsafe_allow_html=True)
 
+    def _start_new_chat_session() -> None:
+        """Creates a fresh isolated conversation for the active user and switches to it."""
+        target_model = st.session_state.get("selected_model_val", model_names[0] if model_names else "gemma4:12b")
+        new_conv_id = create_new_conversation("New Chat", target_model, user_id=curr_uname)
+        st.session_state["active_conv_id"] = new_conv_id
+        st.session_state["messages"] = []
+        st.session_state["loaded_conv_id"] = new_conv_id
+        st.session_state.pop("renaming_conv_id", None)
+        st.session_state.pop("autoplay_video_key", None)
+        st.rerun()
+
     # Action Row: + New Chat & Sign Out
     col_sn1, col_sn2 = st.columns([1.6, 1])
     with col_sn1:
-        if st.button("➕ New Chat", use_container_width=True, type="primary"):
-            target_model = st.session_state.get("selected_model_val", model_names[0] if model_names else "gemma4:12b")
-            new_conv_id = create_new_conversation("New Chat", target_model, user_id=curr_uname)
-            st.session_state["active_conv_id"] = new_conv_id
-            st.session_state["messages"] = []
-            st.session_state["loaded_conv_id"] = new_conv_id
-            st.rerun()
+        if st.button("➕ New Chat", key="sidebar_new_chat_btn", use_container_width=True, type="primary"):
+            _start_new_chat_session()
     with col_sn2:
         if st.button("🚪 Log Out", key="btn_logout", use_container_width=True, help="Log out and return to login screen"):
             sess_id = st.session_state.get("session_id")
@@ -2741,6 +2802,8 @@ def _build_kb_citations_markdown(
                 link_md = f" — [Open Reference]({resolved_u})"
             c_lines.append(f"- **[KB-{idx}]** {item.get('title', 'Tip')} ({' • '.join(bits)}){link_md}")
     if video_bundle:
+        if not c_lines:
+            c_lines.append("\n\n---")
         rec = video_bundle.get("recommended_video")
         if rec and rec.get("url"):
             sol_lbl = video_bundle.get("solution_id") or "Video Guide"
@@ -2748,6 +2811,13 @@ def _build_kb_citations_markdown(
             c_lines.append(
                 f"\n- **🎬 Redirected Video Stream ({sol_lbl}):** "
                 f"[▶ Play {rec['title']}]({rec['url']}) • [Support Page]({res_url})"
+            )
+        elif video_bundle.get("resolved_url") or video_bundle.get("original_url"):
+            sol_lbl = video_bundle.get("solution_id") or "Video Guide"
+            res_url = video_bundle.get("resolved_url") or video_bundle.get("original_url")
+            entry_t = video_bundle.get("entry_title") or "Lenovo Video Guide"
+            c_lines.append(
+                f"\n- **🎬 Video Guide Reference ({sol_lbl}):** [{entry_t}]({res_url})"
             )
         for man in (video_bundle.get("manuals") or [])[:2]:
             if man.get("url"):
@@ -2806,26 +2876,16 @@ def _format_kb_offline_fallback(
     return "\n".join(lines)
 
 
-_KB_VIDEO_INTENT_RE = re.compile(
-    r"\b(?:video|videos|removal|remove|replace|replacement|disassembl\w*|teardown|play|watch|fru|cru|ht\d{4,})\b",
-    re.IGNORECASE,
+from app.services.lenovo_kb_service import (
+    KB_VIDEO_INTENT_RE as _KB_VIDEO_INTENT_RE,
+    KB_VIDEO_META_COMMENT_RE as _KB_VIDEO_META_COMMENT_RE,
+    LENOVO_SOLUTION_URL_RE as _LENOVO_SOLUTION_URL_RE,
+    DIRECT_VIDEO_LINK_RE as _DIRECT_VIDEO_LINK_RE,
+    extract_kb_video_meta_from_text as _extract_kb_video_meta_svc,
+    find_kb_video_targets as _find_kb_video_targets,
+    resolve_chat_kb_videos as _resolve_chat_kb_videos_svc,
+    rewrite_support_url_for_display as _rewrite_support_url_for_display,
 )
-_LENOVO_SOLUTION_URL_RE = re.compile(
-    r"https?://(?:pc)?support\.lenovo\.com/[^\s\)\"'>]+/solutions/(HT\d{4,})",
-    re.IGNORECASE,
-)
-_DIRECT_VIDEO_LINK_RE = re.compile(
-    r"https?://[^\s\)\"'>]+\.(?:mp4|webm|m4v|mov|m3u8)(?:\?[^\s\)\"'>]*)?|https?://(?:www\.)?(?:youtube\.com/(?:watch\?[^#\s\)]*v=|embed/|shorts/)|youtu\.be/)[^\s\)\"'>]+",
-    re.IGNORECASE,
-)
-_KB_VIDEO_META_COMMENT_RE = re.compile(r"\n*<!--\s*kb_video_meta:(\{.*?\})\s*-->", re.DOTALL)
-
-
-def _rewrite_support_url_for_display(url: str) -> str:
-    m = _LENOVO_SOLUTION_URL_RE.search(url or "")
-    if m and "support.lenovo.com" in (url or "").lower():
-        return f"https://pcsupport.lenovo.com/us/en/solutions/{m.group(1).lower()}"
-    return url
 
 
 def _ensure_kb_video_resolver():
@@ -2839,76 +2899,18 @@ def _ensure_kb_video_resolver():
     return lenovo_kb_service
 
 
-def _find_kb_video_targets(kb_matches: List[Dict[str, Any]]) -> List[Dict[str, str]]:
-    """Collects resolvable video/solution URLs from matched KB entries, prioritizing video_guide records."""
-    ordered = sorted(
-        kb_matches or [],
-        key=lambda m: (0 if m.get("source_type") == "video_guide" else 1),
+def _resolve_chat_kb_videos(
+    query: str,
+    kb_matches: List[Dict[str, Any]],
+    require_video_intent: bool = True,
+) -> Optional[Dict[str, Any]]:
+    """Delegates to backend KB video resolver using the hot-reloaded service instance."""
+    return _resolve_chat_kb_videos_svc(
+        query,
+        kb_matches,
+        require_video_intent=require_video_intent,
+        svc=_ensure_kb_video_resolver(),
     )
-    targets: List[Dict[str, str]] = []
-    seen_urls: set = set()
-    for item in ordered:
-        for lk in item.get("links") or []:
-            u = str((lk or {}).get("url") or "").strip()
-            if not u or u in seen_urls:
-                continue
-            is_video_url = bool(
-                item.get("source_type") == "video_guide"
-                or _LENOVO_SOLUTION_URL_RE.search(u)
-                or _DIRECT_VIDEO_LINK_RE.search(u)
-                or "video" in str((lk or {}).get("label") or "").lower()
-            )
-            if is_video_url:
-                seen_urls.add(u)
-                targets.append({
-                    "url": u,
-                    "label": str((lk or {}).get("label") or "Part Removal Video"),
-                    "entry_title": str(item.get("title") or "Lenovo Part Removal Video"),
-                    "source_type": str(item.get("source_type") or ""),
-                })
-    return targets
-
-
-def _resolve_chat_kb_videos(query: str, kb_matches: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-    """Redirects Lenovo solution links and extracts playable videos matching the user's part/model query."""
-    svc = _ensure_kb_video_resolver()
-    targets = _find_kb_video_targets(kb_matches)
-    if not targets:
-        url_m = _LENOVO_SOLUTION_URL_RE.search(query or "") or _DIRECT_VIDEO_LINK_RE.search(query or "")
-        if url_m:
-            raw_u = url_m.group(0)
-            targets = [{
-                "url": raw_u,
-                "label": "Lenovo Video Guide",
-                "entry_title": f"Lenovo Solution {url_m.group(1).upper()}" if _LENOVO_SOLUTION_URL_RE.match(raw_u) else "Video Guide",
-                "source_type": "video_guide",
-            }]
-    if not targets:
-        return None
-
-    top_is_video = bool(kb_matches and kb_matches[0].get("source_type") == "video_guide")
-    has_video_intent = bool(_KB_VIDEO_INTENT_RE.search(query or ""))
-    if not (top_is_video or has_video_intent or targets[0].get("source_type") == "video_guide"):
-        return None
-
-    primary = targets[0]
-    try:
-        res = svc.resolve_solution_videos(primary["url"], query_hint=query)
-    except Exception:
-        return None
-
-    return {
-        "entry_title": primary["entry_title"],
-        "solution_id": res.get("solution_id", ""),
-        "original_url": res.get("original_url", primary["url"]),
-        "resolved_url": res.get("resolved_url", primary["url"]),
-        "videos": res.get("videos") or [],
-        "recommended_video": res.get("recommended_video"),
-        "best_index": int(res.get("best_index") or 0),
-        "manuals": res.get("manuals") or [],
-        "query_hint": query,
-        "error": res.get("error", ""),
-    }
 
 
 def _format_resolved_video_llm_context(video_bundle: Dict[str, Any]) -> str:
@@ -2957,31 +2959,13 @@ def _strip_kb_video_meta_comment(content: str) -> str:
     return _KB_VIDEO_META_COMMENT_RE.sub("", content or "").strip()
 
 
-def _extract_kb_video_meta_from_text(content: str) -> Optional[Dict[str, Any]]:
-    """Extracts persisted video bundle metadata (or direct pcsupport/mp4 links) from saved assistant markdown."""
-    txt = content or ""
-    m = _KB_VIDEO_META_COMMENT_RE.search(txt)
-    if m:
-        try:
-            meta = json.loads(m.group(1))
-            if isinstance(meta, dict) and (meta.get("resolved_url") or meta.get("original_url") or meta.get("recommended_url")):
-                return meta
-        except Exception:
-            pass
-    # Fallback: detect direct MP4/YouTube stream or Lenovo solution link in message
-    sol_m = _LENOVO_SOLUTION_URL_RE.search(txt)
-    dir_m = _DIRECT_VIDEO_LINK_RE.search(txt)
-    if sol_m or dir_m:
-        u = sol_m.group(0) if sol_m else dir_m.group(0)
-        return {
-            "entry_title": f"Lenovo Video Guide ({sol_m.group(1).upper()})" if sol_m else "Part Removal Video",
-            "solution_id": sol_m.group(1).upper() if sol_m else "",
-            "original_url": u,
-            "resolved_url": _rewrite_support_url_for_display(u),
-            "query_hint": "",
-            "recommended_url": dir_m.group(0) if dir_m else "",
-        }
-    return None
+def _extract_kb_video_meta_from_text(content: str, user_prompt: str = "") -> Optional[Dict[str, Any]]:
+    """Extracts persisted video bundle metadata from saved assistant markdown only when a video was requested."""
+    return _extract_kb_video_meta_svc(
+        content,
+        user_prompt=user_prompt,
+        svc=_ensure_kb_video_resolver(),
+    )
 
 
 def _render_kb_video_player(
@@ -3206,6 +3190,7 @@ def render_lenovo_kb_explorer():
                         _exp_v_bundle = _resolve_chat_kb_videos(
                             kb_query.strip() or item.get("title", ""),
                             [item],
+                            require_video_intent=False,
                         )
                         if _exp_v_bundle:
                             _render_kb_video_player(
@@ -3753,14 +3738,17 @@ def render_account_management_section():
 # =========================================================
 if selected_page in ["💬 Chat", "💬 All-in-One Studio", "Chat", "All-in-One Studio"]:
     active_conv_meta = next((c for c in all_conversations if c["id"] == st.session_state["active_conv_id"]), None)
+    is_active_pinned = bool(active_conv_meta.get("is_pinned", 0)) if active_conv_meta else False
     active_title = active_conv_meta["title"] if active_conv_meta else "New Chat"
 
     chat_header_c1, chat_header_c_hist = st.columns([4.8, 1.5])
     with chat_header_c1:
-        st.markdown(f"### 💬 {active_title}")
+        st.markdown(f"### 💬 {'📌 ' if is_active_pinned else ''}{active_title}")
         st.caption(f"Session `{st.session_state['active_conv_id'][:8]}` • {len(st.session_state.messages)} msgs • Active: `{selected_model}`")
     with chat_header_c_hist:
         with st.popover(f"🕒 Recent Chats ({len(all_conversations)})", use_container_width=True):
+            if st.button("➕ New Chat", key="header_new_chat_btn", type="primary", use_container_width=True):
+                _start_new_chat_session()
             hist_filter = st.text_input(
                 "Filter chats",
                 placeholder="🔍 Filter chat history...",
@@ -3771,40 +3759,87 @@ if selected_page in ["💬 Chat", "💬 All-in-One Studio", "Chat", "All-in-One 
                 c for c in all_conversations
                 if not hist_filter or hist_filter in (c.get("title") or "New Chat").lower()
             ]
-            with st.container(height=250):
+            with st.container(height=270):
                 if not filtered_convs:
                     st.caption("No matching chats found.")
                 for conv in filtered_convs:
-                    is_active = (conv["id"] == st.session_state["active_conv_id"])
-                    col_c1, col_c2 = st.columns([5, 1])
+                    cid = conv["id"]
+                    is_active = (cid == st.session_state["active_conv_id"])
+                    is_pinned = bool(conv.get("is_pinned", 0))
+                    raw_t = conv.get("title") or "New Chat"
+                    col_c1, col_pin, col_ren, col_del = st.columns([4.1, 0.85, 0.85, 0.85])
                     with col_c1:
-                        raw_t = conv.get("title") or "New Chat"
-                        display_t = raw_t if len(raw_t) <= 24 else raw_t[:22] + "..."
-                        label = f"▸ {display_t}" if is_active else f"  {display_t}"
+                        prefix = ("▸ " if is_active else "") + ("📌 " if is_pinned else "")
+                        max_title_len = 18 if is_pinned else 20
+                        display_t = raw_t if len(raw_t) <= max_title_len else raw_t[:max_title_len - 2] + "..."
+                        label = f"{prefix}{display_t}" if prefix else f"  {display_t}"
                         if st.button(
                             label,
-                            key=f"ch_{conv['id']}",
+                            key=f"ch_{cid}",
                             use_container_width=True,
-                            help=f"{raw_t}\nModel: {conv.get('model', 'gemma4:12b')} • Messages: {conv.get('msg_count', 0)}"
+                            help=f"{raw_t}\n{'Pinned • ' if is_pinned else ''}Model: {conv.get('model', 'gemma4:12b')} • Messages: {conv.get('msg_count', 0)}"
                         ):
-                            st.session_state["active_conv_id"] = conv["id"]
-                            st.session_state["messages"] = load_conversation_messages(conv["id"], user_id=curr_uname)
-                            st.session_state["loaded_conv_id"] = conv["id"]
+                            st.session_state.pop("renaming_conv_id", None)
+                            st.session_state["active_conv_id"] = cid
+                            st.session_state["messages"] = load_conversation_messages(cid, user_id=curr_uname)
+                            st.session_state["loaded_conv_id"] = cid
                             st.rerun()
-                    with col_c2:
-                        if st.button("✕", key=f"del_{conv['id']}", help="Delete chat", use_container_width=True):
-                            delete_conversation(conv["id"], user_id=curr_uname)
-                            rem = [c for c in all_conversations if c["id"] != conv["id"]]
-                            if rem:
-                                st.session_state["active_conv_id"] = rem[0]["id"]
-                                st.session_state["messages"] = load_conversation_messages(rem[0]["id"], user_id=curr_uname)
-                                st.session_state["loaded_conv_id"] = rem[0]["id"]
+                    with col_pin:
+                        if st.button(
+                            "📌",
+                            key=f"pin_{cid}",
+                            type="primary" if is_pinned else "secondary",
+                            help="Unpin chat" if is_pinned else "Pin chat",
+                            use_container_width=True,
+                        ):
+                            toggle_conversation_pin(cid, not is_pinned, user_id=curr_uname)
+                            st.rerun()
+                    with col_ren:
+                        if st.button("✏️", key=f"ren_{cid}", help="Rename chat", use_container_width=True):
+                            if st.session_state.get("renaming_conv_id") == cid:
+                                st.session_state.pop("renaming_conv_id", None)
                             else:
-                                new_id = create_new_conversation("New Chat", selected_model, user_id=curr_uname)
-                                st.session_state["active_conv_id"] = new_id
-                                st.session_state["messages"] = []
-                                st.session_state["loaded_conv_id"] = new_id
+                                st.session_state["renaming_conv_id"] = cid
                             st.rerun()
+                    with col_del:
+                        if st.button("✕", key=f"del_{cid}", help="Delete chat", use_container_width=True):
+                            if st.session_state.get("renaming_conv_id") == cid:
+                                st.session_state.pop("renaming_conv_id", None)
+                            delete_conversation(cid, user_id=curr_uname)
+                            rem = [c for c in all_conversations if c["id"] != cid]
+                            if is_active:
+                                if rem:
+                                    st.session_state["active_conv_id"] = rem[0]["id"]
+                                    st.session_state["messages"] = load_conversation_messages(rem[0]["id"], user_id=curr_uname)
+                                    st.session_state["loaded_conv_id"] = rem[0]["id"]
+                                else:
+                                    new_id = create_new_conversation("New Chat", selected_model, user_id=curr_uname)
+                                    st.session_state["active_conv_id"] = new_id
+                                    st.session_state["messages"] = []
+                                    st.session_state["loaded_conv_id"] = new_id
+                            st.rerun()
+                    if st.session_state.get("renaming_conv_id") == cid:
+                        ren_col_in, ren_col_ok, ren_col_cancel = st.columns([4.8, 0.95, 0.95])
+                        with ren_col_in:
+                            new_title_val = st.text_input(
+                                "Rename chat",
+                                value=raw_t,
+                                key=f"rename_input_{cid}",
+                                max_chars=80,
+                                placeholder="Enter chat title...",
+                                label_visibility="collapsed",
+                            )
+                        with ren_col_ok:
+                            if st.button("✓", key=f"save_ren_{cid}", help="Save title", use_container_width=True):
+                                if update_conversation_title(cid, new_title_val, user_id=curr_uname):
+                                    st.session_state.pop("renaming_conv_id", None)
+                                    st.rerun()
+                                else:
+                                    st.warning("Chat title cannot be empty.")
+                        with ren_col_cancel:
+                            if st.button("✕", key=f"cancel_ren_{cid}", help="Cancel rename", use_container_width=True):
+                                st.session_state.pop("renaming_conv_id", None)
+                                st.rerun()
 
     # Display empty state starter cards if no messages
     if not st.session_state.messages:
@@ -3894,9 +3929,12 @@ if selected_page in ["💬 Chat", "💬 All-in-One Studio", "Chat", "All-in-One 
             if msg.get("role") == "assistant":
                 _curr_conv_id = st.session_state.get("active_conv_id", "default")
                 _hist_vid_key = f"{_curr_conv_id}:{idx}"
+                _prev_user_prompt = ""
+                if idx > 0 and st.session_state.messages[idx - 1].get("role") == "user":
+                    _prev_user_prompt = str(st.session_state.messages[idx - 1].get("content") or "")
                 _hist_video_bundle = (
                     (st.session_state.get("msg_video_bundles") or {}).get(_hist_vid_key)
-                    or _extract_kb_video_meta_from_text(msg.get("content", ""))
+                    or _extract_kb_video_meta_from_text(msg.get("content", ""), user_prompt=_prev_user_prompt)
                 )
                 if _hist_video_bundle:
                     _should_autoplay = (st.session_state.get("autoplay_video_key") == _hist_vid_key)
@@ -4322,34 +4360,78 @@ if selected_page in ["💬 Chat", "💬 All-in-One Studio", "Chat", "All-in-One 
                 kb_matched_assets = []
                 kb_video_bundle = None
                 _kb_svc = _ensure_kb_video_resolver()
+                kb_intent = _kb_svc.detect_chat_kb_intent(clean_prompt)
+                wants_tips = bool(kb_intent.get("show_tips"))
+                wants_video = bool(kb_intent.get("show_video"))
 
                 response_placeholder = st.empty()
 
-                # Internal Lenovo Tips & Resources Knowledge Base Lookup (runs locally before external web search)
-                if explicit_kb or _kb_svc.detect_lenovo_intent(kb_query_target) or bool(_LENOVO_SOLUTION_URL_RE.search(kb_query_target)):
+                # Internal Lenovo Tips & Resources KB / Video lookup (strictly on user request)
+                if wants_tips or wants_video:
+                    badge_msg = (
+                        f"Searching Lenovo Part Removal Videos for '{kb_query_target[:42]}' ..."
+                        if (wants_video and not wants_tips)
+                        else f"Searching Lenovo Tips & Resources KB for '{kb_query_target[:42]}' ..."
+                    )
                     response_placeholder.markdown(
-                        render_thinking_badge("analysing", f"Searching Lenovo Tips & Resources KB for '{kb_query_target[:42]}' ..."),
+                        render_thinking_badge("analysing", badge_msg),
                         unsafe_allow_html=True,
                     )
                     try:
-                        kb_matches = _kb_svc.search(
-                            kb_query_target,
-                            limit=6,
-                            min_score=10.0 if explicit_kb else 30.0,
-                        )
-                        kb_video_bundle = _resolve_chat_kb_videos(kb_query_target, kb_matches)
-                        if kb_matches:
-                            kb_ctx_str = _kb_svc.format_context_for_llm(kb_query_target, kb_matches)
-                            effective_system += f"\n\n---\n{kb_ctx_str}"
-                            kb_matched_assets = _collect_kb_assets(kb_matches)
-                        if kb_video_bundle:
-                            _vid_ctx_str = _format_resolved_video_llm_context(kb_video_bundle)
-                            if _vid_ctx_str:
-                                effective_system += f"\n\n{_vid_ctx_str}"
-                        if kb_matches or kb_video_bundle:
-                            kb_citations_md = _build_kb_citations_markdown(
-                                kb_matches, video_bundle=kb_video_bundle
+                        if wants_video and not wants_tips:
+                            kb_matches = _kb_svc.search(
+                                kb_query_target,
+                                limit=6,
+                                source_type="video_guide",
+                                min_score=10.0,
                             )
+                            kb_video_bundle = _resolve_chat_kb_videos(
+                                kb_query_target,
+                                kb_matches,
+                                require_video_intent=False,
+                            )
+                            if kb_video_bundle:
+                                _vid_ctx_str = _format_resolved_video_llm_context(kb_video_bundle)
+                                if _vid_ctx_str:
+                                    effective_system += f"\n\n---\n{_vid_ctx_str}"
+                            elif kb_matches:
+                                effective_system += f"\n\n---\n{_kb_svc.format_context_for_llm(kb_query_target, kb_matches[:2])}"
+                            kb_citations_md = _build_kb_citations_markdown(
+                                [],
+                                video_bundle=kb_video_bundle,
+                            )
+                        else:
+                            raw_kb_matches = _kb_svc.search(
+                                kb_query_target,
+                                limit=12 if not wants_video else 8,
+                                min_score=10.0 if explicit_kb else 25.0,
+                            )
+                            if wants_video:
+                                kb_matches = raw_kb_matches[:6]
+                                kb_video_bundle = _resolve_chat_kb_videos(
+                                    kb_query_target,
+                                    kb_matches,
+                                    require_video_intent=False,
+                                )
+                            else:
+                                kb_matches = [
+                                    m for m in raw_kb_matches
+                                    if m.get("source_type") != "video_guide"
+                                ][:6]
+                                kb_video_bundle = None
+
+                            if kb_matches:
+                                kb_ctx_str = _kb_svc.format_context_for_llm(kb_query_target, kb_matches)
+                                effective_system += f"\n\n---\n{kb_ctx_str}"
+                                kb_matched_assets = _collect_kb_assets(kb_matches)
+                            if kb_video_bundle:
+                                _vid_ctx_str = _format_resolved_video_llm_context(kb_video_bundle)
+                                if _vid_ctx_str:
+                                    effective_system += f"\n\n{_vid_ctx_str}"
+                            if kb_matches or kb_video_bundle:
+                                kb_citations_md = _build_kb_citations_markdown(
+                                    kb_matches, video_bundle=kb_video_bundle
+                                )
                     except Exception:
                         kb_matches = []
                         kb_video_bundle = None
@@ -4360,8 +4442,9 @@ if selected_page in ["💬 Chat", "💬 All-in-One Studio", "Chat", "All-in-One 
                     search_query_target = clean_prompt.split(maxsplit=1)[1].strip()
                 elif (
                     not explicit_kb
+                    and not wants_tips
+                    and not wants_video
                     and st.session_state.get("enable_web_search_val", True)
-                    and not (kb_video_bundle and kb_video_bundle.get("videos"))
                 ):
                     search_query_target = web_search_service.detect_search_intent(clean_prompt)
 
@@ -4578,9 +4661,10 @@ if selected_page in ["💬 Chat", "💬 All-in-One Studio", "Chat", "All-in-One 
                 except Exception as e:
                     err_msg = str(e).strip()
                     if (kb_matches or (kb_video_bundle and kb_video_bundle.get("videos"))) and (
-                        explicit_kb or _kb_svc.detect_lenovo_intent(kb_query_target) or bool(kb_video_bundle)
+                        wants_tips or wants_video
                     ):
-                        fallback_md = _format_kb_offline_fallback(kb_query_target, kb_matches, video_bundle=kb_video_bundle)
+                        fallback_matches = kb_matches if wants_tips else []
+                        fallback_md = _format_kb_offline_fallback(kb_query_target, fallback_matches, video_bundle=kb_video_bundle)
                         fallback_md += f"\n\n> ℹ️ *Displayed verified offline records directly from `Tips & Resources` (Local LLM unavailable: {err_msg[:120] or type(e).__name__}).*"
                         _vid_meta_comment = _build_kb_video_metadata_comment(kb_video_bundle)
                         if _vid_meta_comment and "<!-- kb_video_meta:" not in fallback_md:

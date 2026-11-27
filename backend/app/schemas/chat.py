@@ -33,6 +33,7 @@ class ConversationUpdate(BaseModel):
     system_prompt: Optional[str] = None
     temperature: Optional[float] = None
     context_length: Optional[int] = None
+    is_pinned: Optional[bool] = None
 
 class ConversationResponse(BaseModel):
     id: str
@@ -45,6 +46,7 @@ class ConversationResponse(BaseModel):
     updated_at: str
     message_count: Optional[int] = 0
     user_id: Optional[str] = ""
+    is_pinned: bool = False
 
 class ChatCompletionRequest(BaseModel):
     conversation_id: str

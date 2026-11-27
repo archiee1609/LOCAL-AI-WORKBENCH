@@ -33,7 +33,7 @@ def test_tools_listing():
     assert "write_workspace_file" in tool_names
 
 def test_conversation_crud():
-    # Create conversation
+    # Create conversations
     create_res = client.post("/api/chat/conversations", json={
         "title": "API Test Conversation",
         "model": "gemma4:12b",
@@ -43,22 +43,48 @@ def test_conversation_crud():
     conv = create_res.json()
     conv_id = conv["id"]
     assert conv["title"] == "API Test Conversation"
+    assert conv["is_pinned"] is False
+
+    create_res2 = client.post("/api/chat/conversations", json={
+        "title": "Newer Unpinned Conversation",
+        "model": "gemma4:12b",
+    })
+    assert create_res2.status_code == 200
+    conv2_id = create_res2.json()["id"]
 
     # Fetch conversation
     get_res = client.get(f"/api/chat/conversations/{conv_id}")
     assert get_res.status_code == 200
     assert get_res.json()["conversation"]["id"] == conv_id
 
-    # Update conversation
+    # Update conversation title & reject empty title
+    bad_patch = client.patch(f"/api/chat/conversations/{conv_id}", json={"title": "   "})
+    assert bad_patch.status_code == 400
+
     patch_res = client.patch(f"/api/chat/conversations/{conv_id}", json={
-        "title": "Updated Title"
+        "title": "Updated Title",
+        "is_pinned": True
     })
     assert patch_res.status_code == 200
     assert patch_res.json()["title"] == "Updated Title"
+    assert patch_res.json()["is_pinned"] is True
 
-    # Delete conversation
+    # Pinned conversation should appear before newer unpinned ones
+    list_res = client.get("/api/chat/conversations")
+    assert list_res.status_code == 200
+    ids = [c["id"] for c in list_res.json()]
+    assert ids.index(conv_id) < ids.index(conv2_id)
+
+    # Unpin conversation
+    unpin_res = client.patch(f"/api/chat/conversations/{conv_id}", json={"is_pinned": False})
+    assert unpin_res.status_code == 200
+    assert unpin_res.json()["is_pinned"] is False
+
+    # Delete conversations
     del_res = client.delete(f"/api/chat/conversations/{conv_id}")
     assert del_res.status_code == 200
+    del_res2 = client.delete(f"/api/chat/conversations/{conv2_id}")
+    assert del_res2.status_code == 200
 
 def test_coding_workspace_tree():
     res = client.get("/api/coding/workspace/tree")

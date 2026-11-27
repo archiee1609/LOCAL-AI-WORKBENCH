@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS conversations (
     system_prompt TEXT DEFAULT '',
     temperature REAL DEFAULT 0.7,
     context_length INTEGER DEFAULT 8192,
+    is_pinned INTEGER DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -234,6 +235,10 @@ async def run_migrations() -> None:
         pass
     try:
         await db.execute("ALTER TABLE conversations ADD COLUMN user_id TEXT DEFAULT ''")
+    except Exception:
+        pass
+    try:
+        await db.execute("ALTER TABLE conversations ADD COLUMN is_pinned INTEGER DEFAULT 0")
     except Exception:
         pass
     try:

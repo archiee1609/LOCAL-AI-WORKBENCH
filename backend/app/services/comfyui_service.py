@@ -280,12 +280,7 @@ class ComfyUIService:
         self.comfy_dir = settings.base_dir / "ComfyUI"
         self.comfy_main = self.comfy_dir / "main.py"
         self.checkpoints_dir = self.comfy_dir / "models" / "checkpoints"
-        self.checkpoints_dir.mkdir(parents=True, exist_ok=True)
         self.comfy_output_dir = self.comfy_dir / "output"
-        self.comfy_output_dir.mkdir(parents=True, exist_ok=True)
-        (self.comfy_dir / "custom_nodes").mkdir(parents=True, exist_ok=True)
-        (self.comfy_dir / "temp").mkdir(parents=True, exist_ok=True)
-        (self.comfy_dir / "user").mkdir(parents=True, exist_ok=True)
         self._process: Optional[subprocess.Popen] = None
         self.download_state: Optional[Dict[str, Any]] = None
 
@@ -565,6 +560,7 @@ class ComfyUIService:
     async def download_model_background(self, model_key: str):
         """Asynchronously downloads a checkpoint model to ComfyUI/models/checkpoints/ with progress tracking."""
         model_info = POPULAR_MODELS.get(model_key, POPULAR_MODELS["sd15"])
+        self.checkpoints_dir.mkdir(parents=True, exist_ok=True)
         dest_file = self.checkpoints_dir / model_info["filename"]
 
         if dest_file.exists() and dest_file.stat().st_size > 1024 * 1024:
