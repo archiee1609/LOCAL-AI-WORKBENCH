@@ -224,6 +224,37 @@ CREATE TABLE IF NOT EXISTS psref_cache (
     payload_json TEXT DEFAULT '{}',
     fetched_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS sop_files (
+    filename TEXT PRIMARY KEY,
+    sha1 TEXT NOT NULL,
+    mtime REAL NOT NULL,
+    size INTEGER NOT NULL,
+    chunk_count INTEGER DEFAULT 0,
+    synced_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS sop_chunks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    canonical_key TEXT UNIQUE NOT NULL,
+    source_file TEXT NOT NULL,
+    title TEXT NOT NULL,
+    category TEXT DEFAULT 'sop',
+    page_ref TEXT DEFAULT '',
+    content TEXT NOT NULL,
+    image_path TEXT DEFAULT '',
+    mtime REAL DEFAULT 0,
+    updated_at TEXT DEFAULT ''
+);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS sop_chunks_fts USING fts5(
+    chunk_id UNINDEXED,
+    source_file,
+    title,
+    category,
+    content,
+    tokenize='porter unicode61'
+);
 """
 
 async def run_migrations() -> None:
@@ -265,6 +296,41 @@ async def run_migrations() -> None:
                 payload_json TEXT DEFAULT '{}',
                 fetched_at TEXT NOT NULL
             )
+            """
+        )
+    except Exception:
+        pass
+    try:
+        await db.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS sop_files (
+                filename TEXT PRIMARY KEY,
+                sha1 TEXT NOT NULL,
+                mtime REAL NOT NULL,
+                size INTEGER NOT NULL,
+                chunk_count INTEGER DEFAULT 0,
+                synced_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS sop_chunks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                canonical_key TEXT UNIQUE NOT NULL,
+                source_file TEXT NOT NULL,
+                title TEXT NOT NULL,
+                category TEXT DEFAULT 'sop',
+                page_ref TEXT DEFAULT '',
+                content TEXT NOT NULL,
+                image_path TEXT DEFAULT '',
+                mtime REAL DEFAULT 0,
+                updated_at TEXT DEFAULT ''
+            );
+            CREATE VIRTUAL TABLE IF NOT EXISTS sop_chunks_fts USING fts5(
+                chunk_id UNINDEXED,
+                source_file,
+                title,
+                category,
+                content,
+                tokenize='porter unicode61'
+            );
             """
         )
     except Exception:

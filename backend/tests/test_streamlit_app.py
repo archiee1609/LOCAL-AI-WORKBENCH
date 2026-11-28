@@ -181,7 +181,7 @@ def test_render_winxp_progress_bar_downloading_and_complete():
 
 
 def test_streamlit_quick_command_chips_render_cleanly():
-    """Headless test verifying the quick command shortcut chips render cleanly above the chat input."""
+    """Headless test verifying the clean chat layout removes clutter cards/drawers/chips while keeping docked model selector."""
     app_path = Path(__file__).parent.parent.parent / "streamlit_app.py"
     at = AppTest.from_file(str(app_path.resolve()), default_timeout=30)
     at.session_state["authenticated_user"] = {
@@ -193,14 +193,21 @@ def test_streamlit_quick_command_chips_render_cleanly():
     at.run()
     assert len(at.exception) == 0
 
-    # Verify buttons for fast command chips exist
+    # Verify clutter starter cards, attachment/report drawers, context badge, and quick chip bar are removed
     btn_labels = [b.label for b in at.button]
-    assert any("/code" in lbl for lbl in btn_labels)
-    assert any("/report" in lbl for lbl in btn_labels)
-    assert any("/search" in lbl for lbl in btn_labels)
-    assert any("/pull" in lbl for lbl in btn_labels)
+    btn_keys = [b.key for b in at.button]
+    for removed_label in ("Architecture Review", "Executive Report", "Live Web Search", "Autonomous Coding Agent", "/tips", "/code", "/report", "/search", "/pull"):
+        assert not any(removed_label in lbl for lbl in btn_labels)
+    for removed_key in ("chip_tips", "chip_code", "chip_report", "chip_search", "chip_pull", "quick_report_generate_btn"):
+        assert removed_key not in btn_keys
+    assert not any("Context:" in m.value for m in at.markdown)
+    assert not any(ti.key == "quick_report_title_input" for ti in at.text_input)
 
-    # Verify model selector exists directly in the chat command toolbar
+    # Verify clean ISOTOPE READY hero and native chat input remain intact
+    assert any("ISOTOPE" in m.value and "READY" in m.value for m in at.markdown)
+    assert len(at.chat_input) == 1
+
+    # Verify model selector remains docked for the chatbox
     model_selects = [s for s in at.selectbox if s.key == "chat_model_selector"]
     assert len(model_selects) == 1
     assert model_selects[0].value in model_selects[0].options

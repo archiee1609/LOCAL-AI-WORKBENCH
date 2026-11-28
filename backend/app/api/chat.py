@@ -14,6 +14,8 @@ from app.services.tool_registry import tool_registry
 from app.services.web_search_service import web_search_service
 from app.services.lenovo_kb_service import lenovo_kb_service
 from app.services.psref_service import psref_service, detect_psref_intent, format_psref_llm_context
+from app.services.sop_policy_service import sop_policy_service
+from app.services.context_router import select_relevant_chat_history, build_context_scope_note
 from app.schemas.chat import (
     ConversationCreate,
     ConversationUpdate,
@@ -308,6 +310,10 @@ async def chat_completions(req: ChatCompletionRequest):
         max_iterations = settings.max_tool_iterations
 
         try:
+            extra_system_messages: List[Dict[str, str]] = []
+            kb_matches: List[Dict[str, Any]] = []
+            sop_matches: List[Dict[str, Any]] = []
+
             # Automatic Lenovo PSREF lookup whenever MTM or spec query is entered
             psref_intent = detect_psref_intent(req.message)
             web_search_enabled = req.enable_web_search if req.enable_web_search is not None else settings.enable_web_search
@@ -321,7 +327,7 @@ async def chat_completions(req: ChatCompletionRequest):
                     yield f"data: {json.dumps({'type': 'psref_results', 'query': psref_intent['code'], 'result': psref_data})}\n\n"
                     psref_ctx = format_psref_llm_context(psref_data)
                     if psref_ctx:
-                        current_messages.append({"role": "system", "content": psref_ctx})
+                        extra_system_messages.append({"role": "system", "content": psref_ctx})
 
             # Lenovo Tips & Resources Knowledge Base grounding (strictly when user requests tips/KB or videos)
             kb_intent = lenovo_kb_service.detect_chat_kb_intent(req.message)
@@ -348,10 +354,21 @@ async def chat_completions(req: ChatCompletionRequest):
                 if kb_matches:
                     yield f"data: {json.dumps({'type': 'kb_results', 'query': req.message, 'results': kb_matches})}\n\n"
                     kb_context_block = lenovo_kb_service.format_context_for_llm(req.message, kb_matches)
-                    current_messages.append({
+                    extra_system_messages.append({
                         "role": "system",
                         "content": kb_context_block,
                     })
+
+            # Lenovo SOPs & Policies grounding (strictly when user requests SOP, process, or policy)
+            sop_intent = sop_policy_service.detect_chat_sop_intent(req.message)
+            if sop_intent["show_sop"]:
+                sop_matches = sop_policy_service.search(sop_intent["query"], limit=5)
+                if sop_matches:
+                    clean_sops = [{k: v for k, v in m.items() if k != "image_data_uri"} for m in sop_matches]
+                    yield f"data: {json.dumps({'type': 'sop_results', 'query': sop_intent['query'], 'results': clean_sops})}\n\n"
+                    sop_ctx = sop_policy_service.format_context_for_llm(sop_intent["query"], sop_matches)
+                    if sop_ctx:
+                        extra_system_messages.append({"role": "system", "content": sop_ctx})
 
             # Proactive search intent detection and factual augmentation
             search_intent_query = None if psref_intent else web_search_service.detect_search_intent(req.message)
@@ -361,10 +378,22 @@ async def chat_completions(req: ChatCompletionRequest):
                 yield f"data: {json.dumps({'type': 'search_results', 'query': search_intent_query, 'results': search_results})}\n\n"
                 
                 search_context_block = web_search_service.format_search_context(search_intent_query, search_results)
-                current_messages.append({
+                extra_system_messages.append({
                     "role": "system",
                     "content": f"[Live Web Search Context for '{search_intent_query}']:\n{search_context_block}"
                 })
+
+            # Scope prior conversation history to topic-relevant turns (prevents past searches bleeding into unrelated tasks)
+            base_sys = [m for m in ollama_messages if m.get("role") == "system"]
+            non_sys = [m for m in ollama_messages if m.get("role") != "system"]
+            prior_hist = non_sys[:-1] if non_sys else []
+            curr_turn = non_sys[-1:] if non_sys else []
+            has_fresh = bool((psref_data and psref_data.get("found")) or kb_matches or sop_matches or search_intent_query)
+            routed_hist = select_relevant_chat_history(req.message, prior_hist, has_fresh_context=has_fresh)
+            scope_note = build_context_scope_note(routed_hist["topic_shifted"])
+            if scope_note:
+                extra_system_messages.append({"role": "system", "content": scope_note})
+            current_messages = base_sys + extra_system_messages + routed_hist["messages"] + curr_turn
 
             while iterations < max_iterations:
                 iterations += 1

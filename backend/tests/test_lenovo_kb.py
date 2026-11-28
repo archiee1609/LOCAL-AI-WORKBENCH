@@ -187,7 +187,7 @@ def test_kb_api_endpoints_rbac_and_tool_registry(tmp_path):
 def test_streamlit_lenovo_kb_explorer_renders_cleanly():
     app_path = Path(__file__).parent.parent.parent / "streamlit_app.py"
 
-    # Regular User sees Lenovo Tips & Issues nav and /tips chip, NOT Admin sync button
+    # Regular User sees Lenovo Tips & Issues nav and /tips hint in chat input, NOT Admin sync button
     at_user = AppTest.from_file(str(app_path.resolve()), default_timeout=30)
     at_user.session_state["authenticated_user"] = {
         "name": "Archiman Chakraborty",
@@ -197,7 +197,7 @@ def test_streamlit_lenovo_kb_explorer_renders_cleanly():
     }
     at_user.run()
     assert len(at_user.exception) == 0
-    assert any("/tips" in b.label for b in at_user.button)
+    assert any("/tips" in (ci.placeholder or "") for ci in at_user.chat_input)
 
     user_nav = at_user.sidebar.radio[0].options
     assert any("Lenovo Tips & Issues" in opt for opt in user_nav)

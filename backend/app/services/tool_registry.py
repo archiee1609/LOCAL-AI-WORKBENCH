@@ -17,6 +17,7 @@ from app.schemas.tools import ToolDefinition, ToolExecutionResponse
 from app.services.web_search_service import web_search_service
 from app.services.lenovo_kb_service import lenovo_kb_service
 from app.services.psref_service import psref_service, format_psref_llm_context
+from app.services.sop_policy_service import sop_policy_service
 
 # Safe AST evaluator for math
 SAFE_OPERATORS = {
@@ -436,6 +437,30 @@ class ToolRegistry:
             self._handle_lookup_lenovo_psref,
         )
 
+        # 14. Lenovo SOPs & Policies Search
+        self.register_tool(
+            ToolDefinition(
+                name="search_sop_policies",
+                description=(
+                    "Searches indexed Lenovo SOPs & Policies (Call Logging, CEC Case Creation & Cancellation, "
+                    "Phonetic Verification, Customer Email ID Change, Technical Escalation, Restricted Party Screening, "
+                    "Battery Policy, ADP Policy, Dead Pixel Policy, Warranty Policy). "
+                    "ONLY call when the user explicitly asks about an SOP, process, or policy."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "SOP, process, or policy keywords"},
+                        "limit": {"type": "integer", "description": "Maximum policy/SOP sections to return (default 5, max 12)"},
+                    },
+                    "required": ["query"],
+                },
+                category="knowledge_base",
+                is_external=False,
+            ),
+            self._handle_search_sop_policies,
+        )
+
     # Handlers
     async def _handle_calculator(self, args: Dict[str, Any]) -> Dict[str, Any]:
         expr = args.get("expression", "")
@@ -587,6 +612,18 @@ class ToolRegistry:
         return {
             **spec,
             "formatted_context": format_psref_llm_context(spec) if spec.get("found") else spec.get("error", "Not found"),
+        }
+
+    async def _handle_search_sop_policies(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        query = str(args.get("query", "")).strip()
+        limit = min(max(int(args.get("limit", 5)), 1), 12)
+        matches = sop_policy_service.search(query=query, limit=limit)
+        clean_matches = [{k: v for k, v in m.items() if k != "image_data_uri"} for m in matches]
+        return {
+            "query": query,
+            "total_matches": len(clean_matches),
+            "results": clean_matches,
+            "formatted_context": sop_policy_service.format_context_for_llm(query, matches),
         }
 
 tool_registry = ToolRegistry()

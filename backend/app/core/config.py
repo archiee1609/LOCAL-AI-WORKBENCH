@@ -11,9 +11,10 @@ WORKSPACE_DIR = BASE_DIR / "workspace"
 GENERATED_IMAGES_DIR = BASE_DIR / "generated_images"
 BACKUP_DIR = DATA_DIR / "backups"
 TIPS_RESOURCES_DIR = Path(os.getenv("TIPS_RESOURCES_DIR", str(BASE_DIR / "Tips & Resources")))
+SOP_POLICIES_DIR = Path(os.getenv("SOP_POLICIES_DIR", str(BASE_DIR / "SOPs & Policies")))
 KB_ASSETS_DIR = DATA_DIR / "kb_assets"
 
-for d in [DATA_DIR, WORKSPACE_DIR, GENERATED_IMAGES_DIR, BACKUP_DIR, TIPS_RESOURCES_DIR, KB_ASSETS_DIR]:
+for d in [DATA_DIR, WORKSPACE_DIR, GENERATED_IMAGES_DIR, BACKUP_DIR, TIPS_RESOURCES_DIR, SOP_POLICIES_DIR, KB_ASSETS_DIR]:
     d.mkdir(parents=True, exist_ok=True)
 
 def get_user_workspace(username: Optional[str] = None) -> Path:
@@ -116,6 +117,7 @@ class Settings(BaseModel):
     generated_images_dir: Path = GENERATED_IMAGES_DIR.resolve()
     backup_dir: Path = BACKUP_DIR.resolve()
     tips_resources_dir: Path = TIPS_RESOURCES_DIR.resolve()
+    sop_policies_dir: Path = SOP_POLICIES_DIR.resolve()
     kb_assets_dir: Path = KB_ASSETS_DIR.resolve()
     
     # Limits & security

@@ -82,6 +82,8 @@ from app.services.psref_service import (
     format_psref_markdown,
     format_psref_llm_context,
 )
+from app.services.sop_policy_service import sop_policy_service
+from app.services.context_router import select_relevant_chat_history, build_context_scope_note
 from app.core.load_balancer import load_balancer
 
 @st.cache_data(ttl=30)
@@ -192,7 +194,7 @@ def inject_pwa_support():
 
 inject_pwa_support()
 
-# Auto-Dock Model Selector directly inside st.chat_input (Singleton rAF + ResizeObserver, zero layout thrash)
+# Auto-Dock Model Selector directly inside st.chat_input (Zoom/Transform/Resize-Safe rAF + Feedback Compensation)
 def inject_chatbox_model_dock():
     dock_code = """
     <script>
@@ -207,16 +209,22 @@ def inject_chatbox_model_dock():
                 win.__isotopeDockController.cleanup();
             }
 
-            let lastLeft = null;
-            let lastTop = null;
             let lastVisible = null;
             let lastDockEl = null;
             let rafId = null;
             let observedChatInput = null;
+            let observedBottom = null;
 
             function alignModelDockNow() {
                 rafId = null;
                 try {
+                    // Clamp any root document scroll/overscroll so fixed viewport coordinates stay locked to stApp
+                    if (win.scrollY !== 0 || win.scrollX !== 0 || doc.documentElement.scrollTop !== 0 || (doc.body && doc.body.scrollTop !== 0)) {
+                        win.scrollTo(0, 0);
+                        doc.documentElement.scrollTop = 0;
+                        if (doc.body) doc.body.scrollTop = 0;
+                    }
+
                     const modelDock = doc.querySelector('.st-key-chat_model_dock');
                     if (!modelDock) {
                         lastDockEl = null;
@@ -229,8 +237,6 @@ def inject_chatbox_model_dock():
                         if (lastVisible !== false) {
                             modelDock.classList.remove('dock-aligned');
                             lastVisible = false;
-                            lastLeft = null;
-                            lastTop = null;
                         }
                         return;
                     }
@@ -239,19 +245,29 @@ def inject_chatbox_model_dock():
                     if (chatInput.contains(modelDock)) {
                         const mainContainer = doc.querySelector('.main .block-container') || doc.body;
                         mainContainer.appendChild(modelDock);
-                        lastLeft = null;
-                        lastTop = null;
                     }
 
-                    // Observe chatInput resize if element changed
-                    if (resizeObserver && observedChatInput !== chatInput) {
-                        if (observedChatInput) resizeObserver.unobserve(observedChatInput);
-                        resizeObserver.observe(chatInput);
-                        observedChatInput = chatInput;
+                    // Observe chatInput & stBottom resize dynamically (including post-login mount)
+                    if (resizeObserver) {
+                        if (observedChatInput !== chatInput) {
+                            if (observedChatInput) resizeObserver.unobserve(observedChatInput);
+                            resizeObserver.observe(chatInput);
+                            observedChatInput = chatInput;
+                        }
+                        const bottomEl = chatInput.closest('[data-testid="stBottom"]');
+                        if (bottomEl && observedBottom !== bottomEl) {
+                            if (observedBottom) resizeObserver.unobserve(observedBottom);
+                            resizeObserver.observe(bottomEl);
+                            observedBottom = bottomEl;
+                        }
                     }
 
                     const chatRect = chatInput.getBoundingClientRect();
-                    if (chatRect.width === 0 || chatRect.height === 0) return;
+                    if (chatRect.width < 260 || chatRect.height === 0) {
+                        modelDock.classList.remove('dock-aligned');
+                        lastVisible = false;
+                        return;
+                    }
 
                     // Strictly pick the RIGHT-side Send/Stop button (never the left '+' upload button)
                     let submitBtn = chatInput.querySelector('[data-testid="stChatInputSubmitButton"]') ||
@@ -278,38 +294,64 @@ def inject_chatbox_model_dock():
                         }
                     }
 
-                    const dockWidth = 165;
-                    const dockHeight = 32;
-                    let targetLeft;
-                    let targetTop;
-                    if (submitBtn) {
-                        const btnRect = submitBtn.getBoundingClientRect();
-                        targetLeft = Math.round(btnRect.left - dockWidth - 8);
-                        targetTop = Math.round(btnRect.top + (btnRect.height - dockHeight) / 2);
-                    } else {
-                        // Safe anchor pinned cleanly to the right side of stChatInput
-                        targetLeft = Math.round(chatRect.right - dockWidth - 52);
-                        targetTop = Math.round(chatRect.bottom - 14 - dockHeight);
-                    }
-
-                    // Clamp inside chatInput horizontal bounds so it never drifts outside or onto left '+' button
-                    const minSafeLeft = Math.round(chatRect.left + Math.max(48, chatRect.width - dockWidth - 96));
-                    if (targetLeft < minSafeLeft && chatRect.width > dockWidth + 110) {
-                        targetLeft = Math.round(chatRect.right - dockWidth - 52);
-                    }
-
                     const isNewEl = (lastDockEl !== modelDock);
                     lastDockEl = modelDock;
 
-                    // Re-apply inline position whenever element is newly mounted or coordinates changed
-                    if (isNewEl || !modelDock.style.left || lastLeft !== targetLeft) {
-                        modelDock.style.left = targetLeft + 'px';
-                        lastLeft = targetLeft;
+                    // Measure true rendered scale (handles browser zoom, CSS zoom, and ancestor transforms)
+                    let actualRect = modelDock.getBoundingClientRect();
+                    const layoutW = modelDock.offsetWidth || 165;
+                    const layoutH = modelDock.offsetHeight || 32;
+                    const scaleX = (actualRect.width > 0 && layoutW > 0) ? (actualRect.width / layoutW) : 1;
+                    const scaleY = (actualRect.height > 0 && layoutH > 0) ? (actualRect.height / layoutH) : 1;
+                    const dockW = actualRect.width || (165 * scaleX);
+                    const dockH = actualRect.height || (32 * scaleY);
+
+                    let wantLeft;
+                    let wantTop;
+                    if (submitBtn) {
+                        const btnRect = submitBtn.getBoundingClientRect();
+                        wantLeft = btnRect.left - dockW - (8 * scaleX);
+                        wantTop = btnRect.top + (btnRect.height - dockH) / 2;
+                    } else {
+                        wantLeft = chatRect.right - dockW - (52 * scaleX);
+                        wantTop = chatRect.bottom - (14 * scaleY) - dockH;
                     }
-                    if (isNewEl || !modelDock.style.top || lastTop !== targetTop) {
-                        modelDock.style.top = targetTop + 'px';
-                        lastTop = targetTop;
+
+                    // Keep strictly bounded inside stChatInput so it can never drift below or outside the chatbar
+                    const minLeft = chatRect.left + Math.max(44 * scaleX, chatRect.width - dockW - 104 * scaleX);
+                    const maxLeft = chatRect.right - dockW - (44 * scaleX);
+                    if (maxLeft > minLeft) {
+                        wantLeft = Math.min(Math.max(wantLeft, minLeft), maxLeft);
                     }
+                    const minTop = chatRect.top + (4 * scaleY);
+                    const maxTop = chatRect.bottom - dockH - (4 * scaleY);
+                    if (maxTop >= minTop) {
+                        wantTop = Math.min(Math.max(wantTop, minTop), maxTop);
+                    }
+                    wantLeft = Math.round(wantLeft);
+                    wantTop = Math.round(wantTop);
+
+                    // Initialize style coordinates cleanly if missing or newly mounted
+                    let curStyleLeft = parseFloat(modelDock.style.left);
+                    let curStyleTop = parseFloat(modelDock.style.top);
+                    if (isNewEl || Number.isNaN(curStyleLeft) || Number.isNaN(curStyleTop)) {
+                        curStyleLeft = Math.round(wantLeft / scaleX);
+                        curStyleTop = Math.round(wantTop / scaleY);
+                        modelDock.style.left = curStyleLeft + 'px';
+                        modelDock.style.top = curStyleTop + 'px';
+                        actualRect = modelDock.getBoundingClientRect();
+                    }
+
+                    // Feedback compensation corrects any CSS zoom, DPI scaling, or transform/scroll offset
+                    const errX = wantLeft - actualRect.left;
+                    const errY = wantTop - actualRect.top;
+                    if (Math.abs(errX) > 0.5) {
+                        modelDock.style.left = (curStyleLeft + errX / scaleX).toFixed(2) + 'px';
+                    }
+                    if (Math.abs(errY) > 0.5) {
+                        modelDock.style.top = (curStyleTop + errY / scaleY).toFixed(2) + 'px';
+                    }
+
                     if (isNewEl || lastVisible !== true || !modelDock.classList.contains('dock-aligned')) {
                         modelDock.classList.add('dock-aligned');
                         lastVisible = true;
@@ -324,10 +366,22 @@ def inject_chatbox_model_dock():
                 rafId = win.requestAnimationFrame(alignModelDockNow);
             }
 
+            function onScrollOrViewportChange() {
+                alignModelDockNow();
+                scheduleAlign();
+            }
+
             let resizeObserver = null;
             if (typeof win.ResizeObserver === 'function') {
-                resizeObserver = new win.ResizeObserver(scheduleAlign);
+                resizeObserver = new win.ResizeObserver(onScrollOrViewportChange);
                 if (doc.body) resizeObserver.observe(doc.body);
+                const appRoot = doc.querySelector('[data-testid="stApp"]');
+                if (appRoot) resizeObserver.observe(appRoot);
+                const bottomRoot = doc.querySelector('[data-testid="stBottom"]');
+                if (bottomRoot) {
+                    resizeObserver.observe(bottomRoot);
+                    observedBottom = bottomRoot;
+                }
             }
 
             let mutObserver = null;
@@ -343,10 +397,17 @@ def inject_chatbox_model_dock():
                 mutObserver.observe(doc.body, { childList: true, subtree: true });
             }
 
-            win.addEventListener('resize', scheduleAlign, { passive: true });
-            win.addEventListener('scroll', scheduleAlign, { passive: true, capture: true });
+            win.addEventListener('resize', onScrollOrViewportChange, { passive: true });
+            win.addEventListener('scroll', onScrollOrViewportChange, { passive: true, capture: true });
+            doc.addEventListener('scroll', onScrollOrViewportChange, { passive: true, capture: true });
+            win.addEventListener('wheel', scheduleAlign, { passive: true, capture: true });
+            win.addEventListener('touchmove', onScrollOrViewportChange, { passive: true, capture: true });
             doc.addEventListener('transitionend', scheduleAlign, { passive: true, capture: true });
-            const intervalId = win.setInterval(alignModelDockNow, 250);
+            if (win.visualViewport) {
+                win.visualViewport.addEventListener('resize', onScrollOrViewportChange, { passive: true });
+                win.visualViewport.addEventListener('scroll', onScrollOrViewportChange, { passive: true });
+            }
+            const intervalId = win.setInterval(alignModelDockNow, 150);
 
             win.__isotopeDockController = {
                 cleanup: function() {
@@ -356,9 +417,16 @@ def inject_chatbox_model_dock():
                     }
                     if (mutObserver) mutObserver.disconnect();
                     if (resizeObserver) resizeObserver.disconnect();
-                    win.removeEventListener('resize', scheduleAlign);
-                    win.removeEventListener('scroll', scheduleAlign, { capture: true });
+                    win.removeEventListener('resize', onScrollOrViewportChange);
+                    win.removeEventListener('scroll', onScrollOrViewportChange, { capture: true });
+                    doc.removeEventListener('scroll', onScrollOrViewportChange, { capture: true });
+                    win.removeEventListener('wheel', scheduleAlign, { capture: true });
+                    win.removeEventListener('touchmove', onScrollOrViewportChange, { capture: true });
                     doc.removeEventListener('transitionend', scheduleAlign, { capture: true });
+                    if (win.visualViewport) {
+                        win.visualViewport.removeEventListener('resize', onScrollOrViewportChange);
+                        win.visualViewport.removeEventListener('scroll', onScrollOrViewportChange);
+                    }
                     win.clearInterval(intervalId);
                 }
             };
@@ -372,8 +440,6 @@ def inject_chatbox_model_dock():
     """
     import streamlit.components.v1 as components
     components.html(dock_code, height=0, width=0)
-
-inject_chatbox_model_dock()
 
 # Custom Styling (Ultra-Modern, GPU-Optimized Enterprise Theme)
 st.markdown("""
@@ -405,8 +471,20 @@ st.markdown("""
         font-family: 'JetBrains Mono', monospace !important;
     }
 
+    /* Lock Root Viewport & Prevent Edge/Chrome Overscroll Bounce from Detaching Fixed Docks */
+    html, body, #root {
+        overflow: hidden !important;
+        height: 100% !important;
+        max-height: 100% !important;
+        overscroll-behavior: none !important;
+    }
+
     /* Overall App Background & Cyber Wallpaper (no background-attachment: fixed repaint penalty) */
-    .stApp {
+    .stApp, [data-testid="stApp"] {
+        position: fixed !important;
+        inset: 0 !important;
+        overflow: hidden !important;
+        overscroll-behavior: none !important;
         background-color: #060911 !important;
         background-image:
             linear-gradient(180deg, rgba(6, 9, 17, 0.62) 0%, rgba(6, 9, 17, 0.88) 100%),
@@ -415,6 +493,10 @@ st.markdown("""
         background-position: center center !important;
         background-attachment: scroll !important;
         color: #e2e8f0 !important;
+    }
+
+    [data-testid="stMain"], [data-testid="stAppScrollToBottomContainer"], [data-testid="stSidebarContent"] {
+        overscroll-behavior: contain !important;
     }
 
     .main .block-container {
@@ -696,29 +778,6 @@ st.markdown("""
         border-radius: 50% !important;
         box-shadow: 0 0 14px rgba(6, 182, 212, 0.55) !important;
         border: none !important;
-    }
-
-    /* Command Chips Styling - Neon Glow Accents */
-    .command-chip {
-        display: inline-flex;
-        align-items: center;
-        gap: 0.35rem;
-        padding: 0.32rem 0.85rem;
-        border-radius: 9999px;
-        font-size: 0.78rem;
-        font-weight: 600;
-        background: rgba(13, 20, 36, 0.88) !important;
-        border: 1px solid rgba(56, 189, 248, 0.25) !important;
-        color: #cbd5e1 !important;
-        transition: border-color 0.15s ease, color 0.15s ease, transform 0.15s ease;
-        cursor: pointer;
-    }
-    .command-chip:hover {
-        border-color: #00f2fe !important;
-        color: #38bdf8 !important;
-        background: rgba(15, 23, 42, 0.95) !important;
-        transform: translateY(-1.5px);
-        box-shadow: 0 0 14px rgba(0, 242, 254, 0.32) !important;
     }
 
     /* Bottom Chat Model Selector Styling - Fixed Dock directly inside Chatbox Bar */
@@ -1269,6 +1328,10 @@ def render_executive_report_view(report_content: str, default_title: str = "Exec
 @st.cache_resource
 def initialize_system():
     run_async(run_migrations())
+    try:
+        sop_policy_service.sync_documents(force=False)
+    except Exception:
+        pass
     return True
 
 initialize_system()
@@ -3847,7 +3910,7 @@ if selected_page in ["💬 Chat", "💬 All-in-One Studio", "Chat", "All-in-One 
                                 st.session_state.pop("renaming_conv_id", None)
                                 st.rerun()
 
-    # Display empty state starter cards if no messages
+    # Display clean empty-state hero if no messages
     if not st.session_state.messages:
         st.markdown("""
         <div style="text-align: center; padding: 1.6rem 1rem 1.1rem 1rem;">
@@ -3862,61 +3925,6 @@ if selected_page in ["💬 Chat", "💬 All-in-One Studio", "Chat", "All-in-One 
             </p>
         </div>
         """, unsafe_allow_html=True)
-
-        col1, col2 = st.columns(2)
-        with col1:
-            if st.button("🏗️ Architecture Review\n\nAnalyze project architecture & modular patterns", use_container_width=True):
-                st.session_state.prompt_input = "Summarize the key architectural patterns of this application and suggest modular improvements."
-            if st.button("🌐 Live Web Search\n\nSearch Wikipedia, news & documentation with /search", use_container_width=True):
-                st.session_state.prompt_input = "/search latest AI breakthroughs 2026"
-        with col2:
-            if st.button("📄 Executive Report\n\nGenerate structured technical report with /report", use_container_width=True):
-                st.session_state.prompt_input = "/report Executive Architecture and Performance Assessment"
-            if st.button("💻 Autonomous Coding Agent\n\nInspect files, propose diffs, and run tests with /code", use_container_width=True):
-                st.session_state.prompt_input = "/code review workspace files and run pytest suite"
-
-    # Multimodal & document file attachment expander (supports up to 5 files: PDF, Word, Code, Images)
-    with st.expander("📎 File Attachment Drawer (Supports up to 5 files: PDF, DOCX, Code, Images)", expanded=False):
-        drawer_files = st.file_uploader(
-            "Select or drop up to 5 files",
-            accept_multiple_files=True,
-            key="chat_drawer_file_uploader",
-            help="Upload up to 5 resumes, job descriptions, PDF/Word documents, code files, or images. You can also click the 📎 paperclip directly inside the chat input bar below!"
-        )
-
-    # Executive Report Generator & Multi-Format Exporter Drawer
-    with st.expander("📄 Executive Report Generator & Exporter (PDF, Word, Excel, PPT, ZIP)", expanded=False):
-        rep_col_left, rep_col_right = st.columns([2.5, 1.5])
-        with rep_col_left:
-            quick_rep_title = st.text_input(
-                "Report Topic / Title",
-                value="Executive Architecture & Performance Assessment",
-                key="quick_report_title_input"
-            )
-            quick_rep_scope = st.text_area(
-                "Scope & Key Questions (Optional)",
-                placeholder="Include architectural tradeoffs, benchmarks, security considerations, and actionable roadmap...",
-                key="quick_report_scope_input",
-                height=70
-            )
-        with rep_col_right:
-            quick_rep_type = st.selectbox(
-                "Report Template",
-                options=[
-                    "Executive Architecture & Performance",
-                    "Security & Codebase Quality Audit",
-                    "Feature Roadmap & Technical Strategy",
-                    "Comprehensive Research & Deep-Dive"
-                ],
-                key="quick_report_template_select"
-            )
-            st.caption("Auto-synthesizes sections and prepares downloadable PDF, DOCX, XLSX, PPTX, and ZIP files.")
-            if st.button("🚀 Generate & Export Report", key="quick_report_generate_btn", use_container_width=True):
-                full_rep_prompt = f"/report {quick_rep_title}"
-                if quick_rep_scope.strip():
-                    full_rep_prompt += f" -- {quick_rep_scope.strip()}"
-                st.session_state.prompt_input = full_rep_prompt
-                st.rerun()
 
     # Render Conversation History
     for idx, msg in enumerate(st.session_state.messages):
@@ -3971,40 +3979,9 @@ if selected_page in ["💬 Chat", "💬 All-in-One Studio", "Chat", "All-in-One 
             label_visibility="collapsed",
             help="Switch active AI model directly at the chatbox"
         )
+    inject_chatbox_model_dock()
 
-    # Quick Command Chips Bar
-    col_cmd_left, col_cmd_right = st.columns([2.0, 8.0])
-    with col_cmd_left:
-        st.markdown(
-            f'<div style="padding-top: 5px;">'
-            f'<span class="command-chip" style="font-size: 0.72rem; color: #64748b; white-space: nowrap;">Context: {context_tokens}</span>'
-            f'</div>',
-            unsafe_allow_html=True
-        )
-    with col_cmd_right:
-        col_c0, col_c1, col_c2, col_c3, col_c4 = st.columns(5)
-        with col_c0:
-            if st.button("📚 /tips", key="chip_tips", help="Search Lenovo Tips & Known Issues Knowledge Base", use_container_width=True):
-                st.session_state.prompt_input = "/tips ThinkPad T14 Gen 6 auto restart issue"
-                st.rerun()
-        with col_c1:
-            if st.button("💻 /code", key="chip_code", help="Autonomous Coding Agent: file inspection, diffs & pytest", use_container_width=True):
-                st.session_state.prompt_input = "/code review workspace files and run pytest suite"
-                st.rerun()
-        with col_c2:
-            if st.button("📊 /report", key="chip_report", help="Executive Report Generator", use_container_width=True):
-                st.session_state.prompt_input = "/report Executive Architecture & Performance Assessment"
-                st.rerun()
-        with col_c3:
-            if st.button("🌐 /search", key="chip_search", help="Live Web Search: Wikipedia, Bing RSS & real-time facts", use_container_width=True):
-                st.session_state.prompt_input = "/search latest AI breakthroughs 2026"
-                st.rerun()
-        with col_c4:
-            if st.button("📥 /pull", key="chip_pull", help="Download AI models from Ollama Library", use_container_width=True):
-                st.session_state.prompt_input = "/pull llama3.2"
-                st.rerun()
-
-    # Chat Input Box (Native paperclip support for uploading up to 5 files)
+    # Chat Input Box (Native attachment support for uploading up to 5 files)
     default_prompt = st.session_state.pop("prompt_input", "")
     chat_submission = st.chat_input(
         "Ask anything, enter an MTM (e.g. 83J2003NIN) for automatic PSREF specs, /tips, /search, /report, /code, /pull...",
@@ -4028,12 +4005,6 @@ if selected_page in ["💬 Chat", "💬 All-in-One Studio", "Chat", "All-in-One 
             incoming_files = list(chat_submission.files or [])
         elif isinstance(chat_submission, dict):
             incoming_files = list(chat_submission.get("files", []))
-
-    # Also include any files selected in the attachment drawer
-    if drawer_files:
-        for df in drawer_files:
-            if not any(f.name == df.name for f in incoming_files):
-                incoming_files.append(df)
 
     # Cap to maximum 5 files at once
     if len(incoming_files) > 5:
@@ -4104,7 +4075,7 @@ if selected_page in ["💬 Chat", "💬 All-in-One Studio", "Chat", "All-in-One 
             if prompt_to_use.strip().startswith("/image"):
                 pass
 
-            elif is_rep and not prompt_to_use.strip().lower().startswith(("/tips", "/kb", "!tips", "!kb", "/psref", "!psref")):
+            elif is_rep and not prompt_to_use.strip().lower().startswith(("/tips", "/kb", "!tips", "!kb", "/psref", "!psref", "/sop", "!sop", "/policy", "!policy")):
                 status_box = st.empty()
                 status_box.markdown(
                     render_thinking_badge("analysing", f"Evaluating technical architecture and diagnostics for '{report_title}'..."),
@@ -4500,6 +4471,32 @@ if selected_page in ["💬 Chat", "💬 All-in-One Studio", "Chat", "All-in-One 
                         kb_matches = []
                         kb_video_bundle = None
 
+                # Internal Lenovo SOPs & Policies lookup (strictly when user asks an SOP/process/policy or /sop)
+                sop_intent = sop_policy_service.detect_chat_sop_intent(clean_prompt)
+                sop_matches: List[Dict[str, Any]] = []
+                sop_citations_md = ""
+                sop_image_items: List[Tuple[str, str]] = []
+                if sop_intent.get("show_sop"):
+                    response_placeholder.markdown(
+                        render_thinking_badge("analysing", f"Searching SOPs & Policies for '{sop_intent['query'][:42]}' ..."),
+                        unsafe_allow_html=True,
+                    )
+                    try:
+                        sop_matches = sop_policy_service.search(sop_intent["query"], limit=5)
+                        if sop_matches:
+                            _sop_ctx = sop_policy_service.format_context_for_llm(sop_intent["query"], sop_matches)
+                            if _sop_ctx:
+                                effective_system += f"\n\n---\n{_sop_ctx}"
+                            sop_citations_md = sop_policy_service.format_sop_citations_markdown(sop_matches)
+                            seen_img_uris: Set[str] = set()
+                            for sm in sop_matches:
+                                uri = sm.get("image_data_uri") or ""
+                                if uri and uri not in seen_img_uris:
+                                    seen_img_uris.add(uri)
+                                    sop_image_items.append((uri, str(sm.get("title") or sm.get("source_file") or "Policy")))
+                    except Exception:
+                        sop_matches = []
+
                 # Check for live web search intent or explicit /search command
                 search_query_target = None
                 if clean_prompt.startswith(("/search ", "!search ", "/web ")):
@@ -4508,6 +4505,7 @@ if selected_page in ["💬 Chat", "💬 All-in-One Studio", "Chat", "All-in-One 
                     not explicit_kb
                     and not wants_tips
                     and not wants_video
+                    and not sop_matches
                     and not (psref_res and psref_res.get("found"))
                     and st.session_state.get("enable_web_search_val", True)
                 ):
@@ -4535,9 +4533,28 @@ if selected_page in ["💬 Chat", "💬 All-in-One Studio", "Chat", "All-in-One 
                     except Exception as s_err:
                         pass
 
-                # Format conversation history for Ollama
+                # Format conversation history for Ollama (retain only topic-relevant prior turns like ChatGPT/Gemini)
+                prior_history = list(st.session_state.messages[:-1])
+                current_user_turn = st.session_state.messages[-1:]
+                has_fresh_ctx = bool(
+                    kb_matches
+                    or kb_video_bundle
+                    or sop_matches
+                    or (psref_res and psref_res.get("found"))
+                    or search_query_target
+                    or attached_docs_context
+                )
+                routed_hist = select_relevant_chat_history(
+                    clean_prompt,
+                    prior_history,
+                    has_fresh_context=has_fresh_ctx,
+                )
+                scope_note = build_context_scope_note(routed_hist["topic_shifted"])
+                if scope_note:
+                    effective_system += f"\n\n---\n{scope_note}"
+
                 ollama_messages = [{"role": "system", "content": effective_system}]
-                for m in st.session_state.messages[-10:]:
+                for m in routed_hist["messages"] + current_user_turn:
                     msg_item = {"role": m["role"], "content": _strip_kb_video_meta_comment(m["content"])}
                     if m.get("raw_images"):
                         msg_item["images"] = m["raw_images"]
@@ -4674,6 +4691,9 @@ if selected_page in ["💬 Chat", "💬 All-in-One Studio", "Chat", "All-in-One 
                     if kb_citations_md and kb_citations_md not in full_response:
                         full_response += kb_citations_md
 
+                    if sop_citations_md and sop_citations_md not in full_response:
+                        full_response += sop_citations_md
+
                     if psref_citations_md and psref_citations_md not in full_response:
                         full_response += psref_citations_md
 
@@ -4684,7 +4704,12 @@ if selected_page in ["💬 Chat", "💬 All-in-One Studio", "Chat", "All-in-One 
                     if _vid_meta_comment and "<!-- kb_video_meta:" not in full_response:
                         full_response += _vid_meta_comment
 
-                    assistant_images = [a["data_uri"] for a in kb_matched_assets if a.get("data_uri")]
+                    assistant_img_items = [
+                        (a["data_uri"], a.get("caption", ""))
+                        for a in kb_matched_assets
+                        if a.get("data_uri")
+                    ] + sop_image_items
+                    assistant_images = [uri for uri, _ in assistant_img_items]
 
                     if is_report_content(full_response):
                         response_placeholder.empty()
@@ -4692,10 +4717,10 @@ if selected_page in ["💬 Chat", "💬 All-in-One Studio", "Chat", "All-in-One 
                     else:
                         response_placeholder.markdown(full_response, unsafe_allow_html=True)
 
-                    if assistant_images:
-                        cols_kb_img = st.columns(min(len(assistant_images), 3))
-                        for k_i, k_uri in enumerate(assistant_images):
-                            cols_kb_img[k_i % len(cols_kb_img)].image(k_uri, caption=kb_matched_assets[k_i]["caption"], use_container_width=True)
+                    if assistant_img_items:
+                        cols_kb_img = st.columns(min(len(assistant_img_items), 3))
+                        for k_i, (k_uri, k_cap) in enumerate(assistant_img_items):
+                            cols_kb_img[k_i % len(cols_kb_img)].image(k_uri, caption=k_cap, use_container_width=True)
 
                     if kb_video_bundle:
                         _new_msg_key = f"{st.session_state['active_conv_id']}:{len(st.session_state.messages)}"
@@ -4705,14 +4730,26 @@ if selected_page in ["💬 Chat", "💬 All-in-One Studio", "Chat", "All-in-One 
 
                     save_chat_message(st.session_state["active_conv_id"], "assistant", full_response, assistant_images)
                     st.session_state.messages.append({"role": "assistant", "content": full_response, "images": assistant_images})
-                    _ev_kind = "search" if search_query_target else ("tips" if (explicit_kb or kb_matches or kb_video_bundle) else "chat")
+                    _ev_kind = (
+                        "search"
+                        if search_query_target
+                        else (
+                            "sop"
+                            if sop_matches
+                            else ("tips" if (explicit_kb or kb_matches or kb_video_bundle) else "chat")
+                        )
+                    )
                     _ev_detail = (
                         f"Web search: {search_query_target[:60]}"
                         if search_query_target
                         else (
-                            f"Lenovo KB ({len(kb_matches)} matches): {kb_query_target[:50]}"
-                            if (explicit_kb or kb_matches or kb_video_bundle)
-                            else (f"{len(incoming_files)} attachment(s)" if incoming_files else "Chat completion")
+                            f"SOPs & Policies ({len(sop_matches)} matches): {sop_intent['query'][:45]}"
+                            if sop_matches
+                            else (
+                                f"Lenovo KB ({len(kb_matches)} matches): {kb_query_target[:50]}"
+                                if (explicit_kb or kb_matches or kb_video_bundle)
+                                else (f"{len(incoming_files)} attachment(s)" if incoming_files else "Chat completion")
+                            )
                         )
                     )
                     audit_service.record_event(
@@ -4743,6 +4780,27 @@ if selected_page in ["💬 Chat", "💬 All-in-One Studio", "Chat", "All-in-One 
                             tokens_est=estimate_tokens(prompt_to_use) + estimate_tokens(fallback_md),
                             duration_ms=int((time.perf_counter() - t_action_start) * 1000),
                             details=f"PSREF fallback ({psref_intent['code'] if psref_intent else ''})",
+                        )
+                    elif sop_matches and sop_intent.get("show_sop"):
+                        fallback_md = sop_policy_service.format_sop_offline_fallback(sop_intent["query"], sop_matches)
+                        fallback_md += f"\n\n> ℹ️ *Displayed verified records directly from `SOPs & Policies` (Local LLM unavailable: {err_msg[:120] or type(e).__name__}).*"
+                        assistant_images = [uri for uri, _ in sop_image_items]
+                        response_placeholder.markdown(fallback_md, unsafe_allow_html=True)
+                        if sop_image_items:
+                            cols_sop_img = st.columns(min(len(sop_image_items), 3))
+                            for s_i, (s_uri, s_cap) in enumerate(sop_image_items):
+                                cols_sop_img[s_i % len(cols_sop_img)].image(s_uri, caption=s_cap, use_container_width=True)
+                        save_chat_message(st.session_state["active_conv_id"], "assistant", fallback_md, assistant_images)
+                        st.session_state.messages.append({"role": "assistant", "content": fallback_md, "images": assistant_images})
+                        audit_service.record_event(
+                            username=curr_uname,
+                            user_role=user_role,
+                            event_type="sop",
+                            model_used="offline-sop",
+                            conversation_id=st.session_state["active_conv_id"],
+                            tokens_est=estimate_tokens(prompt_to_use) + estimate_tokens(fallback_md),
+                            duration_ms=int((time.perf_counter() - t_action_start) * 1000),
+                            details=f"Offline SOP fallback ({len(sop_matches)} matches)",
                         )
                     elif (kb_matches or (kb_video_bundle and kb_video_bundle.get("videos"))) and (
                         wants_tips or wants_video
